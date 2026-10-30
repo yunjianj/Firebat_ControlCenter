@@ -1,0 +1,50 @@
+# ---- 操作系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# ---- 临时文件与日志 ----
+/tmp/
+*.log
+*.tmp
+*.bak
+
+# ---- 厂商安装包与二进制（体积大，不入库） ----
+# 主安装包约 177 MB，超过常见 Git 托管平台的单文件限制
+/Windows/**/*.exe
+/Windows/**/*.msi
+/Windows/**/*.msix
+/Windows/**/*.msixbundle
+/Windows/**/*.appx
+/Windows/**/*.appxbundle
+/Windows/**/*.appxsym
+/Windows/**/*.cer
+/Windows/**/*.p7x
+/Windows/**/*.dll
+/Windows/**/*.sys
+/Windows/**/*.cat
+/Windows/**/*.inf
+/Windows/**/*.zip
+/Windows/**/*.7z
+/Windows/**/*.cab
+/Windows/**/*.ico
+/Windows/**/*.png
+/Windows/**/*.jpg
+/Windows/**/*.jpeg
+
+# 解包/反编译产物（如本地生成）
+/build/
+/dist/
+/decompiled/
+/extracted/
+
+# ---- 保留小型可读配置与说明 ----
+!/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/setup.ini
+!/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/RGBKeyboard.reg
+!/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/安装前必读.txt
+!/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/PreinstallKit/*.ps1

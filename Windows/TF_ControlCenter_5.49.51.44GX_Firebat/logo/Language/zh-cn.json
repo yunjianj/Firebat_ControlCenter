@@ -1,0 +1,17 @@
+﻿{
+  "strLogoTitle": "综合控制中心",
+  "strLogoTitleControlCenter": "综合控制中心",
+  "strTrayLaunch": "打开综合控制中心",
+  "strTrayLaunchControlCenter": "打开综合控制中心",
+  "strTurboMode": "性能模式",
+  "strSmartMode": "游戏模式",
+  "strOfficeModeInfo": "提供较为安静的运行环境以及更长的续航。",
+  "strSmartModeInfo": "为游戏优化性能释放。",
+  "strTurboModeInfo": "放弃噪声和温度控制，提供极致的性能释放。",
+  "strCustomModeInfo": "手动创建性能模式配置文件。",
+  "strTrayTurboMode": "性能模式",
+  "strTrayGamingMode": "游戏模式",
+  "strHybrid": "节能模式",
+  "strIGPUOnlyON": "核显输出",
+  "strIGPUOnlyOFF": "混合输出"
+}

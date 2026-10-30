@@ -1,0 +1,21 @@
+﻿{
+  "strLogoTitle": "Firebat Control Center",
+  "strLogoTitleControlCenter": "Firebat Control Center",
+  "strTrayLaunch": "Enable Firebat Control Center",
+  "strTrayLaunchControlCenter": "Enable Firebat Control Center",
+  "strTurboMode": "Performance Mode",
+  "strSmartMode": "Gaming Mode",
+  "strOfficeModeInfo": "It provides a quieter operating environment and longer standby time.",
+  "strSmartModeInfo": "Optimize performance unleashing for gaming.",
+  "strTurboModeInfo": "Open noise and temperature limits for ultimate performance release.",
+  "strCustomModeInfo": "Manually create a performance mode profile.",
+  "strTrayTurboMode": "Performance Mode",
+  "strTrayGamingMode": "Gaming Mode",
+  "strDGPUOnly": "DGPU",
+  "strIGPUOnlyON": "IGPU",
+  "strIGPUOnlyOFF": "Hybrid",
+  "strIGPUOnlyNote1": "The GPU is currently in use and does not support switching. Please try again later.",
+  "strIGPUOnlyNote2": "Note : Only can be switch without any external monitor",
+  "strDGpuOnlyConnectionInfo": "DGPU use only",
+  "strIGpuOnlyConnectionInfo": "DGPU on/off automatically according to usage scenarios and battery life requirements"
+}
