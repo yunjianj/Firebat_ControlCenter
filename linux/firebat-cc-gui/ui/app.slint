@@ -1,0 +1,301 @@
+// Firebat GX 控制中心 —— 主窗口
+import { Theme } from "theme.slint";
+import { Backend, Nav } from "state.slint";
+import { FButton, Badge, FIcon, NavItem, StatusPill, FToast, ThemeSwitch, Divider, VDivider } from "widgets.slint";
+import { OverviewPage } from "pages/overview.slint";
+import { PerformancePage } from "pages/performance.slint";
+import { DisplayPage } from "pages/display.slint";
+import { KeyboardPage } from "pages/keyboard.slint";
+import { DebugPage } from "pages/debug.slint";
+
+export { Theme, Backend, Nav }
+
+export component AppWindow inherits Window {
+    title: "Firebat 控制中心";
+    preferred-width: 1200px;
+    preferred-height: 830px;
+    min-width: 1040px;
+    min-height: 720px;
+    background: Theme.bg;
+    default-font-size: 13px;
+    // 窗口/任务栏图标也用官方 Logo
+    icon: @image-url("assets/logo.png");
+
+    // 轻提示自动消失
+    Timer {
+        interval: 2.8s;
+        running: Backend.toast-visible;
+        triggered => { Backend.dismiss-toast(); }
+    }
+
+    HorizontalLayout {
+        // ------------------------------------------------ 侧栏
+        Rectangle {
+            width: 216px;
+            background: Theme.surface;
+
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                height: parent.height;
+                background: Theme.border;
+            }
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 4px;
+
+                // 品牌
+                HorizontalLayout {
+                    spacing: 10px;
+                    // 官方 Logo：取自 Windows/TF_ControlCenter_5.49.51.44GX_Firebat/logo/
+                    // gamingcenter_Firebat.ico 内嵌的 256×256 PNG（原始 logo.png 仅 48×48）
+                    Rectangle {
+                        width: 34px;
+                        height: 34px;
+                        border-radius: 9px;
+                        clip: true;
+                        Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: @image-url("assets/logo.png");
+                            image-fit: cover;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 0px;
+                        Text { text: "Firebat"; color: Theme.text; font-size: 14px; font-weight: 750; }
+                        Text { text: "GX 控制中心"; color: Theme.text-mute; font-size: 10px; }
+                    }
+                }
+
+                Rectangle { height: 16px; }
+
+                Text {
+                    text: "控制";
+                    color: Theme.text-mute;
+                    font-size: 9.5px;
+                    font-weight: 700;
+                    letter-spacing: 1.2px;
+                }
+
+                NavItem { label: "概览"; glyph: 0; active: Nav.page == 0; clicked => { Nav.page = 0; } }
+                NavItem { label: "性能模式"; glyph: 1; active: Nav.page == 1; clicked => { Nav.page = 1; } }
+                NavItem { label: "显卡输出"; glyph: 2; active: Nav.page == 2; clicked => { Nav.page = 2; } }
+                NavItem { label: "键盘背光"; glyph: 3; active: Nav.page == 3; clicked => { Nav.page = 3; } }
+                NavItem { label: "EC 调试"; glyph: 4; active: Nav.page == 4; clicked => { Nav.page = 4; } }
+
+                Rectangle { vertical-stretch: 1; }
+
+                Divider { }
+                Rectangle { height: 8px; }
+
+                StatusPill {
+                    on: Backend.connected;
+                    text: Backend.connected ? "守护进程在线" : "守护进程未连接";
+                    tone: Backend.connected ? Theme.ok : Theme.danger;
+                }
+
+                Text {
+                    text: Backend.socket-path;
+                    color: Theme.text-mute;
+                    font-size: 9.5px;
+                    font-family: "monospace";
+                    overflow: TextOverflow.elide;
+                }
+
+                Rectangle { height: 6px; }
+
+                Text {
+                    text: "外观";
+                    color: Theme.text-mute;
+                    font-size: 9.5px;
+                    font-weight: 700;
+                    letter-spacing: 1.2px;
+                }
+
+                Rectangle { height: 2px; }
+
+                ThemeSwitch {
+                    mode: Backend.theme-mode;
+                    picked(m) => { Backend.set-theme-mode(m); }
+                }
+
+                // 自动模式下显示实际跟随到的结果，便于确认系统检测是否生效
+                Text {
+                    text: Backend.theme-mode == "auto"
+                        ? ("跟随系统 · 当前" + (Theme.dark ? "深色" : "浅色"))
+                        : (Backend.theme-mode == "dark" ? "固定深色" : "固定浅色");
+                    color: Theme.text-mute;
+                    font-size: 9.5px;
+                }
+
+                Rectangle { height: 6px; }
+
+                Text {
+                    text: "firebat-cc-gui 0.1.0";
+                    color: Theme.text-mute;
+                    font-size: 9px;
+                    font-family: "monospace";
+                }
+            }
+        }
+
+        // ------------------------------------------------ 主区域
+        VerticalLayout {
+            // 顶栏
+            Rectangle {
+                height: 76px;
+                background: Theme.bg;
+
+                HorizontalLayout {
+                    padding-left: 24px;
+                    padding-right: 24px;
+                    spacing: 10px;
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: Nav.titles[Nav.page];
+                            color: Theme.text;
+                            font-size: 19px;
+                            font-weight: 750;
+                        }
+                        Text {
+                            text: Nav.subtitles[Nav.page];
+                            color: Theme.text-mute;
+                            font-size: 11px;
+                        }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: Backend.busy ? "通信中…" : "";
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        vertical-alignment: center;
+                    }
+
+                    FButton {
+                        text: "刷新";
+                        kind: 2;
+                        y: (parent.height - self.height) / 2;
+                        clicked => { Backend.refresh(); }
+                    }
+                }
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border;
+                }
+            }
+
+            // 页面
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                if Nav.page == 0: OverviewPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+                if Nav.page == 1: PerformancePage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+                if Nav.page == 2: DisplayPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+                if Nav.page == 3: KeyboardPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+                if Nav.page == 4: DebugPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+            }
+        }
+    }
+
+    // ------------------------------------------------ 二次确认
+    if Backend.confirm-visible: Rectangle {
+        background: rgba(0, 0, 0, 0.52);
+
+        TouchArea {
+            clicked => { Backend.confirm-cancel(); }
+        }
+
+        panel := Rectangle {
+            width: 452px;
+            height: 214px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 16px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Backend.confirm-danger ? Theme.danger.transparentize(0.5) : Theme.border;
+            drop-shadow-blur: 48px;
+            drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+            TouchArea { }
+
+            VerticalLayout {
+                padding: 22px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        width: 26px;
+                        height: 26px;
+                        border-radius: 8px;
+                        background: Backend.confirm-danger ? Theme.danger-soft : Theme.accent-soft;
+                        y: (parent.height - self.height) / 2;
+                        Text {
+                            text: Backend.confirm-danger ? "!" : "?";
+                            color: Backend.confirm-danger ? Theme.danger : Theme.accent;
+                            font-size: 14px;
+                            font-weight: 800;
+                            width: parent.width;
+                            height: parent.height;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: Backend.confirm-title;
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                Text {
+                    text: Backend.confirm-body;
+                    color: Theme.text-dim;
+                    font-size: 11.5px;
+                    wrap: TextWrap.word-wrap;
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle { horizontal-stretch: 1; }
+                    FButton {
+                        text: "取消";
+                        kind: 0;
+                        clicked => { Backend.confirm-cancel(); }
+                    }
+                    FButton {
+                        text: Backend.confirm-ok;
+                        kind: Backend.confirm-danger ? 3 : 1;
+                        clicked => { Backend.confirm-accept(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------ 轻提示
+    FToast {
+        text: Backend.toast-text;
+        kind: Backend.toast-kind;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - 58px + (Backend.toast-visible ? 0px : 16px);
+        opacity: Backend.toast-visible ? 1 : 0;
+        animate opacity { duration: 170ms; }
+        animate y { duration: 170ms; }
+    }
+}

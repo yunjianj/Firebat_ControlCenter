@@ -1,0 +1,112 @@
+// 前后端共享状态：所有页面直接读写这里的属性，回调由 Rust 侧接管。
+// 数据来源：firebat-cc serve 的 JSON 行协议（见 linux/serve-协议.md）
+
+export struct LogEntry {
+    time: string,
+    text: string,
+    kind: int, // 0 信息 1 成功 2 警告 3 错误
+}
+
+export struct EcCell {
+    addr: string,
+    value: int,
+    hex: string,
+    bits: string,
+}
+
+// 界面导航（纯 UI 状态）
+export global Nav {
+    in-out property <int> page: 0;
+    out property <[string]> titles: ["概览", "性能模式", "显卡输出", "键盘背光", "EC 调试"];
+    out property <[string]> subtitles: [
+        "硬件的当前状态一览",
+        "三档性能模式，直接写入 EC 模式寄存器",
+        "混合输出 / 独显直连，写入 UEFI 变量后重启生效",
+        "单区 RGB 背光：颜色、亮度、彩虹循环",
+        "直接读取 EC 扩展寄存器，便于核对逆向结论",
+    ];
+}
+
+export global Backend {
+    // ---------------- 连接状态 ----------------
+    in-out property <bool> connected: false;
+    in-out property <bool> busy: false;
+    in-out property <string> socket-path: "/run/firebat-cc.sock";
+    in-out property <string> daemon-version: "";
+    /// 外观模式："auto"（跟随系统，默认）/ "light" / "dark"。
+    /// 实际的深浅由 Theme.dark 承载，Rust 侧按此模式解析后写入。
+    in-out property <string> theme-mode: "auto";
+    /// 是否已接管性能模式键（守护进程监听模式）。界面运行时保持开启，
+    /// 由守护进程轮询 EC 0x0751 并在按键后按我们的顺序推进档位。
+    in-out property <bool> listening: false;
+
+    // ---------------- 性能模式 ----------------
+    in-out property <int> mode-index: 0; // 1 办公 2 游戏 3 狂暴 4 自定义 0 未知
+    in-out property <string> mode-name: "未知";
+    in-out property <string> mode-bits: "--";
+    in-out property <int> mode-raw: -1;
+    in-out property <string> backend-name: "--";
+    in-out property <string> status-detail: "";
+    in-out property <bool> fan-boost: false;
+
+    // ---------------- 显卡输出 ----------------
+    in-out property <string> gpu-state: "unknown"; // hybrid | dgpu | unknown
+    in-out property <int> gpu-raw: -1;
+    in-out property <string> gpu-var: "";
+    in-out property <int> gpu-payload-len: 0;
+    in-out property <bool> reboot-pending: false;
+
+    // ---------------- 键盘背光 ----------------
+    in-out property <bool> kb-disabled: false;
+    in-out property <bool> kb-white-only: false;
+    in-out property <int> kb-brightness-level: 0;
+    in-out property <int> kb-brightness-max: 4;
+    in-out property <bool> kb-rainbow: false;
+    in-out property <int> kb-ec-r: 0;
+    in-out property <int> kb-ec-g: 0;
+    in-out property <int> kb-ec-b: 0;
+    in-out property <color> kb-color: #000000;
+
+    // 取色器（0-255，与 EC 0-50 值域解耦，写入时由工具换算）
+    in-out property <int> pick-r: 255;
+    in-out property <int> pick-g: 138;
+    in-out property <int> pick-b: 61;
+
+    // ---------------- EC 调试 ----------------
+    in-out property <int> ec-base: 1873; // 0x751
+    in-out property <string> ec-addr-text: "0x0751";
+    in-out property <int> ec-count: 8;
+    in-out property <string> ec-read-time: "";
+    in-out property <[EcCell]> ec-cells: [];
+
+    // ---------------- 日志 / 提示 ----------------
+    in-out property <[LogEntry]> log: [];
+    in-out property <string> toast-text: "";
+    in-out property <int> toast-kind: 0;
+    in-out property <bool> toast-visible: false;
+
+    // ---------------- 二次确认对话框 ----------------
+    in-out property <bool> confirm-visible: false;
+    in-out property <string> confirm-title: "";
+    in-out property <string> confirm-body: "";
+    in-out property <string> confirm-ok: "确认写入";
+    in-out property <bool> confirm-danger: false;
+    in-out property <string> pending-action: ""; // mode:3 / gpu:hybrid / kb:reset
+
+    // ---------------- 回调（由 Rust 实现） ----------------
+    callback refresh();
+    callback request-mode(int);
+    callback gpu-write(string);
+    callback set-kb-color(int, int, int);
+    callback kb-brightness(int);
+    callback set-kb-rainbow(bool);
+    callback kb-power(bool);
+    callback kb-reset();
+    callback ec-step(int);
+    callback ec-preset(int);
+    callback ec-read();
+    callback confirm-accept();
+    callback confirm-cancel();
+    callback dismiss-toast();
+    callback set-theme-mode(string);
+}

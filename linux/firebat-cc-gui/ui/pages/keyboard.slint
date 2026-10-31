@@ -1,0 +1,333 @@
+// 键盘背光：单区 RGB，颜色 / 亮度 / 彩虹 / 开关
+import { Theme } from "../theme.slint";
+import { Backend } from "../state.slint";
+import { FCard, FButton, Badge, FSlider, FToggle, Swatch, KeyVal, Divider, VDivider } from "../widgets.slint";
+
+component ChannelRow inherits Rectangle {
+    in property <string> label: "";
+    in property <color> tint: Theme.accent;
+    in property <int> value: 0;
+    callback changed(float);
+
+    height: 26px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: root.label;
+            color: root.tint;
+            font-size: 11.5px;
+            font-weight: 700;
+            font-family: "monospace";
+            width: 14px;
+            vertical-alignment: center;
+        }
+        FSlider {
+            minimum: 0;
+            maximum: 255;
+            value: root.value;
+            tint: root.tint;
+            horizontal-stretch: 1;
+            changed(v) => { root.changed(v); }
+        }
+        Text {
+            text: root.value;
+            color: Theme.text-dim;
+            font-size: 11px;
+            font-family: "monospace";
+            width: 30px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component KeyboardPage inherits Rectangle {
+    background: transparent;
+
+    property <[int]> pr: [255, 109, 53, 48, 10, 191, 255, 10];
+    property <[int]> pg: [109, 45, 214, 209, 132, 90, 255, 10];
+    property <[int]> pb: [53, 85, 10, 88, 255, 242, 255, 12];
+
+    in-out property <float> bri: Backend.kb-brightness-level * 100 / 4;
+    property <color> preview: Backend.kb-rainbow
+        ? @linear-gradient(90deg, #ff3b30 0%, #ffcc00 18%, #34c759 36%, #0a84ff 54%, #bf5af2 72%, #ff3b30 100%)
+        : rgb(Backend.pick-r, Backend.pick-g, Backend.pick-b);
+
+    VerticalLayout {
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 14px;
+            height: 348px;
+
+            // ------------------------------------------ 取色
+            FCard {
+                horizontal-stretch: 3;
+                pad: 18px;
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        Text { text: "颜色"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                        Rectangle { horizontal-stretch: 1; }
+                        if Backend.kb-white-only: Badge { label: "单色白光键盘"; tone: Theme.text-mute; }
+                    }
+
+                    Rectangle {
+                        height: 84px;
+                        border-radius: 12px;
+                        background: root.preview;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        drop-shadow-blur: 26px;
+                        drop-shadow-color: Backend.kb-rainbow ? Theme.shadow : rgb(Backend.pick-r, Backend.pick-g, Backend.pick-b);
+                        drop-shadow-offset-y: 2px;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 7px;
+                        for i in 8: Swatch {
+                            swatch: rgb(root.pr[i], root.pg[i], root.pb[i]);
+                            selected: Backend.pick-r == root.pr[i] && Backend.pick-g == root.pg[i] && Backend.pick-b == root.pb[i];
+                            clicked => {
+                                Backend.pick-r = root.pr[i];
+                                Backend.pick-g = root.pg[i];
+                                Backend.pick-b = root.pb[i];
+                                Backend.set-kb-color(root.pr[i], root.pg[i], root.pb[i]);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    Rectangle { height: 2px; }
+
+                    // RGB 滑杆
+                    ChannelRow {
+                        label: "R";
+                        tint: #ff5f56;
+                        value: Backend.pick-r;
+                        changed(v) => { Backend.pick-r = round(v); }
+                    }
+                    ChannelRow {
+                        label: "G";
+                        tint: #27c93f;
+                        value: Backend.pick-g;
+                        changed(v) => { Backend.pick-g = round(v); }
+                    }
+                    ChannelRow {
+                        label: "B";
+                        tint: #3d8bff;
+                        value: Backend.pick-b;
+                        changed(v) => { Backend.pick-b = round(v); }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "R" + Backend.pick-r + " G" + Backend.pick-g + " B" + Backend.pick-b;
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                            font-family: "monospace";
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        FButton {
+                            text: "应用颜色";
+                            kind: 1;
+                            enabled: !Backend.kb-rainbow;
+                            clicked => { Backend.set-kb-color(Backend.pick-r, Backend.pick-g, Backend.pick-b); }
+                        }
+                    }
+                }
+            }
+
+            // ------------------------------------------ 开关与亮度
+            FCard {
+                horizontal-stretch: 2;
+                pad: 18px;
+
+                VerticalLayout {
+                    spacing: 12px;
+
+                    Text { text: "开关与亮度"; color: Theme.text; font-size: 13px; font-weight: 650; }
+
+                    Rectangle {
+                        height: 48px;
+                        border-radius: 10px;
+                        background: Theme.surface-2;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            Text { text: "背光"; color: Theme.text; font-size: 12.5px; vertical-alignment: center; horizontal-stretch: 1; }
+                            FToggle {
+                                checked: !Backend.kb-disabled;
+                                y: (parent.height - self.height) / 2;
+                                toggled(ok) => { Backend.kb-power(ok); }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 48px;
+                        border-radius: 10px;
+                        background: Theme.surface-2;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            Text { text: "彩虹循环"; color: Theme.text; font-size: 12.5px; vertical-alignment: center; horizontal-stretch: 1; }
+                            FToggle {
+                                checked: Backend.kb-rainbow;
+                                tint: Theme.accent;
+                                y: (parent.height - self.height) / 2;
+                                toggled(on) => { Backend.set-kb-rainbow(on); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        HorizontalLayout {
+                            Text { text: "亮度"; color: Theme.text; font-size: 12.5px; horizontal-stretch: 1; }
+                            Text {
+                                text: Backend.kb-white-only ? round(root.bri) + "%" : "第 " + Backend.kb-brightness-level + " / " + Backend.kb-brightness-max + " 级";
+                                color: Theme.text-dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        FSlider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: root.bri;
+                            changed(v) => {
+                                root.bri = v;
+                                Backend.kb-brightness(round(v));
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        FButton {
+                            text: "熄灭";
+                            kind: 2;
+                            expand: true;
+                            clicked => { Backend.kb-power(false); }
+                        }
+                        FButton {
+                            text: "重置背光";
+                            kind: 0;
+                            expand: true;
+                            // 彩虹循环时重置色不会被看到（EC 仍在循环），与「应用颜色」保持一致禁用
+                            enabled: !Backend.kb-rainbow;
+                            clicked => { Backend.kb-reset(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------ 寄存器详情
+        FCard {
+            height: 212px;
+            pad: 18px;
+
+            HorizontalLayout {
+                spacing: 26px;
+
+                VerticalLayout {
+                    horizontal-stretch: 3;
+                    spacing: 7px;
+                    alignment: start;
+
+                    HorizontalLayout {
+                        Text { text: "EC 寄存器"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: "Uniwill ITE EC"; color: Theme.text-mute; font-size: 10.5px; }
+                    }
+                    Divider { }
+
+                    KeyVal { key: "状态寄存器 0x078C"; value: Backend.kb-disabled ? "bit1 = 1（已关闭）" : "bit1 = 0（已开启）"; mono: true; }
+                    KeyVal { key: "亮度级 bit5-7"; value: Backend.kb-brightness-level + " / " + Backend.kb-brightness-max; mono: true; }
+                    KeyVal { key: "颜色通道 0x0769-6B"; value: "R" + Backend.kb-ec-r + "  G" + Backend.kb-ec-g + "  B" + Backend.kb-ec-b; mono: true; }
+                    KeyVal { key: "模式寄存器 0x0767"; value: Backend.kb-rainbow ? "bit7 = 1（彩虹）" : "bit5 应用颜色"; mono: true; }
+                    KeyVal { key: "键盘类型"; value: Backend.kb-white-only ? "白色单色（0x1802 调光）" : "单区 RGB"; mono: true; }
+                }
+
+                VDivider { }
+
+                VerticalLayout {
+                    horizontal-stretch: 2;
+                    spacing: 7px;
+                    alignment: start;
+
+                    Text { text: "写入流程"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                    Divider { }
+                    Text {
+                        text: "颜色：0-255 → EC 0-50（v × 200 / (255 × 4)）→ 依次写 0x0769 / 0x076A / 0x076B → 置 0x0767 的 bit5 应用。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                    Text {
+                        text: "亮度：0-100% 映射到 0-4 级，写回 0x078C 时置 0x10 应用位；白色单色键盘改走 0x1802。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                    Text {
+                        text: "彩虹：置 0x0767 的 bit7；关闭时清除该位并重新应用当前颜色。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    Text {
+                        text: "以上偏移均来自分析报告附录 A 与 tuxedo-drivers 的 uniwill 实现交叉验证。";
+                        color: Theme.text-mute;
+                        font-size: 10px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+            }
+        }
+        FCard {
+            vertical-stretch: 1;
+            pad: 14px;
+
+            VerticalLayout {
+                spacing: 5px;
+                Text { text: "提示"; color: Theme.text; font-size: 12.5px; font-weight: 650; }
+                Divider { }
+                Text {
+                    text: "· 取色器为 0-255，写入时由工具换算到 EC 的 0-50 值域，实际颜色可能略有偏差。";
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    wrap: TextWrap.word-wrap;
+                }
+                Text {
+                    text: "· 亮度滑杆连续拖动时会自动节流（约 70ms 一次），避免过密的 EC 写入。";
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    wrap: TextWrap.word-wrap;
+                }
+                Text {
+                    text: "· 彩虹循环开启后「应用颜色」与「重置背光」不可用；关闭彩虹会自动重新应用当前颜色。";
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    wrap: TextWrap.word-wrap;
+                }
+            }
+        }
+    }
+}

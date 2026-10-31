@@ -1,0 +1,205 @@
+// 显卡输出：混合 / 独显直连（写 UEFI 变量，重启生效）
+import { Theme } from "../theme.slint";
+import { Backend } from "../state.slint";
+import { FCard, FButton, Badge, KeyVal, Divider, VDivider } from "../widgets.slint";
+
+component GpuOption inherits Rectangle {
+    in property <string> state-key: "hybrid";
+    in property <string> title: "";
+    in property <string> desc: "";
+    in property <string> tag: "";
+    in property <bool> current: false;
+    in property <bool> selected: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    border-radius: 14px;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.accent : (root.hover ? Theme.text-mute : Theme.border);
+    background: root.selected ? Theme.accent-soft : (root.hover ? Theme.surface-2 : Theme.surface);
+    animate background { duration: 140ms; }
+    animate border-color { duration: 140ms; }
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: root.selected ? 5.5px : 1.5px;
+                border-color: root.selected ? Theme.accent : Theme.text-mute;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.current: Badge { label: "当前生效"; tone: Theme.ok; }
+        }
+
+        Text {
+            text: root.desc;
+            color: Theme.text-dim;
+            font-size: 11.5px;
+            wrap: TextWrap.word-wrap;
+            horizontal-stretch: 1;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        Text {
+            text: root.tag;
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            font-family: "monospace";
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+export component DisplayPage inherits Rectangle {
+    background: transparent;
+
+    in-out property <string> picked: "";
+    property <string> effective: root.picked == "" ? (Backend.gpu-state == "unknown" ? "hybrid" : Backend.gpu-state) : root.picked;
+    property <bool> can-apply: root.effective != Backend.gpu-state && Backend.gpu-state != "unknown";
+
+    VerticalLayout {
+        spacing: 14px;
+
+        // 重启提示
+        if Backend.reboot-pending: Rectangle {
+            height: 52px;
+            border-radius: 12px;
+            background: Theme.warn-soft;
+            border-width: 1px;
+            border-color: Theme.warn.transparentize(0.5);
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
+                Text {
+                    text: "已写入 UEFI 变量，重启后生效";
+                    color: Theme.warn;
+                    font-size: 12px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: "BIOS 在下次开机时读取 OemDisplayMode 并切换 MUX";
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 188px;
+
+            GpuOption {
+                horizontal-stretch: 1;
+                state-key: "hybrid";
+                title: "混合输出";
+                desc: "核显负责显示输出，独显按需渲染。续航更好，兼容性最佳，外接屏与内屏可同时使用。";
+                tag: "OemDisplayMode = 0";
+                current: Backend.gpu-state == "hybrid";
+                selected: root.effective == "hybrid";
+                clicked => { root.picked = "hybrid"; }
+            }
+
+            GpuOption {
+                horizontal-stretch: 1;
+                state-key: "dgpu";
+                title: "独显直连";
+                desc: "独显直接驱动内屏，绕过核显中转。游戏帧率更稳，但功耗更高，部分机型需重启后重新登录桌面。";
+                tag: "OemDisplayMode = 1";
+                current: Backend.gpu-state == "dgpu";
+                selected: root.effective == "dgpu";
+                clicked => { root.picked = "dgpu"; }
+            }
+        }
+
+        FCard {
+            pad: 16px;
+            height: 74px;
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    spacing: 3px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.can-apply
+                            ? (root.effective == "dgpu" ? "将请求切换到独显直连" : "将请求切换到混合输出")
+                            : (Backend.gpu-state == "unknown" ? "尚未读取到当前状态" : "当前状态与所选一致");
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 650;
+                    }
+                    Text {
+                        text: "写入后必须重启才生效；写入过程为「整块读 → 改 OemDisplayMode → 整块写回」。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        overflow: TextOverflow.elide;
+                    }
+                }
+                FButton {
+                    text: "写入 UEFI 变量";
+                    kind: 1;
+                    enabled: root.can-apply;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        Backend.confirm-title = root.effective == "dgpu" ? "切换到独显直连？" : "切换到混合输出？";
+                        Backend.confirm-body = "将修改 UEFI 厂商变量（GUID 9f33f85c…c593）中的 OemDisplayMode 字段并整块写回。此类写入属于高风险操作，写入后需要重启才会生效，重启前请勿断电。";
+                        Backend.confirm-ok = "写入并重启后生效";
+                        Backend.confirm-danger = true;
+                        Backend.pending-action = "gpu:" + root.effective;
+                        Backend.confirm-visible = true;
+                    }
+                }
+            }
+        }
+
+        FCard {
+            vertical-stretch: 1;
+            pad: 18px;
+
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "UEFI 变量详情"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                Divider { }
+
+                KeyVal { key: "变量名"; value: Backend.gpu-var == "" ? "--" : Backend.gpu-var; mono: true; }
+                KeyVal { key: "GUID"; value: "9f33f85c-13ca-4fd1-9c4a-96217722c593"; mono: true; }
+                KeyVal { key: "OemDisplayMode 偏移"; value: "0x62 (98)"; mono: true; }
+                KeyVal { key: "原始值"; value: Backend.gpu-raw >= 0 ? Backend.gpu-raw : "--"; mono: true; }
+                KeyVal { key: "NVRAM 结构长度"; value: Backend.gpu-payload-len > 0 ? Backend.gpu-payload-len + " 字节" : "--"; mono: true; }
+
+                Rectangle { vertical-stretch: 1; }
+
+                Text {
+                    text: "0 / 1 与混合 / 独显的对应关系来自工厂默认值推断；如与本机不符，可用 --hybrid-value / --dgpu-value 覆盖，并用 firebat-cc uefi-dump 前后对比确认。";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                    wrap: TextWrap.word-wrap;
+                }
+            }
+        }
+    }
+}

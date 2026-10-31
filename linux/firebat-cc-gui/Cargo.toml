@@ -1,0 +1,32 @@
+[package]
+name = "firebat-cc-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Firebat GX 控制中心图形前端（Slint）"
+license = "GPL-2.0+"
+
+[dependencies]
+# Slint 1.18：winit 后端 + femtovg 渲染器，X11 与 Wayland 均可运行
+slint = { version = "1.18", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "backend-winit-x11",
+    "backend-winit-wayland",
+    "renderer-winit-femtovg",
+    "renderer-software",
+    "software-renderer-systemfonts",
+    "compat-1-2",
+] }
+serde_json = "1"
+
+[build-dependencies]
+slint-build = "1.18"
+
+# 仅 examples/screenshot.rs（离线预览渲染）使用
+[dev-dependencies]
+rgb = "0.8"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

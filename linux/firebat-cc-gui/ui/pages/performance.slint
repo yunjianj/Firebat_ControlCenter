@@ -1,0 +1,329 @@
+// 性能模式：三档切换 + 寄存器位映射参考
+import { Theme } from "../theme.slint";
+import { Backend } from "../state.slint";
+import { FCard, FButton, Badge, ModeTile, KeyVal, ModeBars, Divider, VDivider } from "../widgets.slint";
+
+// 列宽统一定义：表头与数据行必须引用同一组宽度。
+// 不能用 horizontal-stretch 对齐——stretch 只是在各自 preferred 宽度之上分配余量，
+// 表头文字（"档位"）比数据文字（"游戏（均衡）"）窄，列宽就会差出十几像素。
+global Cols {
+    out property <length> name: 104px;   // 模式柱 + 档位名
+    out property <length> bits: 112px;   // 模式位
+    out property <length> hex: 48px;     // EC 值
+}
+
+component BitRow inherits Rectangle {
+    in property <string> label: "";
+    in property <string> name: "";
+    in property <string> effect: "";
+    in property <color> tone: Theme.text-mute;
+
+    height: 24px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 12px;
+        Text {
+            text: root.label;
+            color: Theme.text-dim;
+            font-size: 10.5px;
+            font-family: "monospace";
+            width: 60px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.name;
+            color: Theme.text-dim;
+            font-size: 10.5px;
+            horizontal-stretch: 2;
+            vertical-alignment: center;
+            overflow: TextOverflow.elide;
+        }
+        Text {
+            text: root.effect;
+            color: root.tone;
+            font-size: 10.5px;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: TextOverflow.elide;
+        }
+    }
+}
+
+component MapRow inherits Rectangle {
+    in property <int> level: 1;
+    in property <string> name: "";
+    in property <string> bits: "";
+    in property <string> hex: "";
+    in property <string> note: "";
+    in property <bool> active: false;
+
+    height: 30px;
+    border-radius: 8px;
+    background: root.active ? Theme.accent-soft : transparent;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            width: Cols.name;
+            spacing: 8px;
+            ModeBars { level: root.level; tint: root.active ? Theme.accent : Theme.text-mute; }
+            Text {
+                text: root.name;
+                color: root.active ? Theme.text : Theme.text-dim;
+                font-size: 11.5px;
+                vertical-alignment: center;
+                overflow: TextOverflow.elide;
+            }
+        }
+
+        Text {
+            text: root.bits;
+            color: Theme.text-dim;
+            font-size: 11px;
+            font-family: "monospace";
+            width: Cols.bits;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.hex;
+            color: Theme.accent;
+            font-size: 11px;
+            font-family: "monospace";
+            width: Cols.hex;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.note;
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: TextOverflow.elide;
+        }
+    }
+}
+
+export component PerformancePage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 64px;
+
+            FCard {
+                horizontal-stretch: 1;
+                pad: 16px;
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "三档性能模式"; color: Theme.text; font-size: 15px; font-weight: 700; }
+                    Text {
+                        text: "写入 EC 0x0751 的 BIT7/BIT5/BIT4，仅改动模式位，其余位（含风扇增强 BIT6）保持原值";
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        overflow: TextOverflow.elide;
+                    }
+                }
+            }
+
+            Badge {
+                label: "当前 " + Backend.mode-name;
+                tone: Theme.accent;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 150px;
+
+            ModeTile {
+                wide: true;
+                horizontal-stretch: 1;
+                title: "办公";
+                caption: "低功耗、低噪音，适合离电续航与轻办公（0xA0 = BIT7 | BIT5）";
+                bits: "EC 0x0751 → 0xA0";
+                level: 1;
+                active: Backend.mode-index == 1;
+                clicked => { Backend.request-mode(1); }
+            }
+
+            ModeTile {
+                wide: true;
+                horizontal-stretch: 1;
+                title: "游戏（均衡）";
+                caption: "默认均衡调度，兼顾性能与温度（0x20 = BIT5）";
+                bits: "EC 0x0751 → 0x20";
+                level: 2;
+                active: Backend.mode-index == 2;
+                clicked => { Backend.request-mode(2); }
+            }
+
+            ModeTile {
+                wide: true;
+                horizontal-stretch: 1;
+                title: "狂暴";
+                caption: "风扇全开、功耗墙放宽，建议接通电源使用（0x30 = BIT5 | BIT4）";
+                bits: "EC 0x0751 → 0x30";
+                level: 3;
+                active: Backend.mode-index == 3;
+                clicked => {
+                    Backend.confirm-title = "切换到狂暴档？";
+                    Backend.confirm-body = "狂暴档会放宽功耗墙并让风扇全速运转，插电时更合适。该操作可随时切回其他档位。";
+                    Backend.confirm-ok = "切换到狂暴";
+                    Backend.confirm-danger = false;
+                    Backend.pending-action = "mode:3";
+                    Backend.confirm-visible = true;
+                }
+            }
+        }
+
+        FCard {
+            vertical-stretch: 1;
+            pad: 18px;
+
+            HorizontalLayout {
+                spacing: 24px;
+
+                // 左：位映射表
+                VerticalLayout {
+                    horizontal-stretch: 3;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        Text { text: "寄存器位映射"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: "来源：分析报告 §5.1 / 附录 A.1"; color: Theme.text-mute; font-size: 10.5px; }
+                    }
+
+                    Divider { }
+
+                    // 表头引用与 MapRow 完全相同的列宽（Cols），并复制同样的内边距与间距。
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 12px;
+
+                        HorizontalLayout {
+                            width: Cols.name;
+                            spacing: 8px;
+                            Rectangle { width: 19px; }
+                            Text { text: "档位"; color: Theme.text-mute; font-size: 10.5px; font-weight: 600; vertical-alignment: center; }
+                        }
+                        Text { text: "模式位（BIT7..4）"; color: Theme.text-mute; font-size: 10.5px; font-weight: 600; width: Cols.bits; vertical-alignment: center; overflow: TextOverflow.elide; }
+                        Text { text: "EC 值"; color: Theme.text-mute; font-size: 10.5px; font-weight: 600; width: Cols.hex; vertical-alignment: center; }
+                        Text { text: "说明"; color: Theme.text-mute; font-size: 10.5px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                    }
+
+                    MapRow { level: 1; name: "办公"; bits: "1010"; hex: "0xA0"; note: "USER + HIGH"; active: Backend.mode-index == 1; }
+                    MapRow { level: 2; name: "游戏（均衡）"; bits: "0010"; hex: "0x20"; note: "仅 HIGH；BIOS 默认"; active: Backend.mode-index == 2; }
+                    MapRow { level: 3; name: "狂暴"; bits: "0011"; hex: "0x30"; note: "HIGH + TURBO"; active: Backend.mode-index == 3; }
+
+                    Rectangle { height: 6px; }
+
+                    Text { text: "其它位"; color: Theme.text; font-size: 12px; font-weight: 650; }
+                    Divider { }
+
+                    BitRow {
+                        label: "BIT6";
+                        name: "风扇增强 FAN_MODE_BOOST";
+                        effect: Backend.fan-boost ? "当前已开启" : "当前关闭";
+                        tone: Backend.fan-boost ? Theme.accent : Theme.text-mute;
+                    }
+                    BitRow {
+                        label: "BIT3..0";
+                        name: "EC 内部功能位";
+                        effect: "读-改-写时保持原值";
+                        tone: Theme.text-mute;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    Text {
+                        text: "位名对应 EC 固件：BIT7 = FAN_MODE_USER、BIT5 = FAN_MODE_HIGH、BIT4 = FAN_MODE_TURBO；掩码 0xB0，BIT6 为风扇增强，切换时原样保留。";
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+
+                VDivider { }
+
+                // 右：写入与校验
+                VerticalLayout {
+                    horizontal-stretch: 2;
+                    spacing: 8px;
+
+                    Text { text: "当前档位"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                    Divider { }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        ModeBars {
+                            level: Backend.mode-index >= 1 && Backend.mode-index <= 3 ? Backend.mode-index : 1;
+                            width: 26px;
+                            height: 22px;
+                            bar-width: 6px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Text {
+                            text: Backend.mode-name;
+                            color: Theme.text;
+                            font-size: 28px;
+                            font-weight: 800;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: Backend.mode-bits;
+                            color: Theme.accent;
+                            font-size: 20px;
+                            font-weight: 800;
+                            font-family: "monospace";
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text { text: "写入与校验"; color: Theme.text; font-size: 12px; font-weight: 650; }
+                    Divider { }
+                    Text {
+                        text: "· 采用「读 - 改 - 写」：只替换 BIT7/5/4，其余位（含 BIT6）保持原值。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                    Text {
+                        text: "· 写入后立即回读 0x0751 校验，若与目标不符会在日志中提示。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                    Text {
+                        text: "· Fn 快捷键或命令行改档会被 4 秒轮询捕获，界面自动同步。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    Text {
+                        text: "后端：" + Backend.backend-name;
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

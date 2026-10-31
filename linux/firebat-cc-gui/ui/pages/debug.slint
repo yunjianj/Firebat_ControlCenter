@@ -1,0 +1,231 @@
+// EC 调试：直接读扩展寄存器，核对逆向结论
+import { Theme } from "../theme.slint";
+import { Backend } from "../state.slint";
+import { FCard, FButton, Badge, KeyVal, Divider, VDivider } from "../widgets.slint";
+
+export component DebugPage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 1;
+
+            // ------------------------------------------ 地址控制
+            FCard {
+                width: 272px;
+                pad: 18px;
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    Text { text: "读取地址"; color: Theme.text; font-size: 13px; font-weight: 650; }
+
+                    Rectangle {
+                        height: 62px;
+                        border-radius: 11px;
+                        background: Theme.dark ? Theme.bg.transparentize(0.35) : Theme.surface-2;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        Text {
+                            text: Backend.ec-addr-text;
+                            color: Theme.accent;
+                            font-size: 24px;
+                            font-weight: 800;
+                            font-family: "monospace";
+                            x: 14px;
+                            y: 0;
+                            height: parent.height;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "十进制 " + Backend.ec-base;
+                            color: Theme.text-mute;
+                            font-size: 10px;
+                            font-family: "monospace";
+                            x: parent.width - self.width - 14px;
+                            y: 0;
+                            height: parent.height;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FButton { text: "−16"; kind: 2; expand: true; clicked => { Backend.ec-step(-16); } }
+                        FButton { text: "−1"; kind: 2; expand: true; clicked => { Backend.ec-step(-1); } }
+                        FButton { text: "+1"; kind: 2; expand: true; clicked => { Backend.ec-step(1); } }
+                        FButton { text: "+16"; kind: 2; expand: true; clicked => { Backend.ec-step(16); } }
+                    }
+
+                    Divider { }
+
+                    Text { text: "常用寄存器"; color: Theme.text-mute; font-size: 10.5px; font-weight: 600; }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FButton { text: "0x0751 模式"; kind: 0; expand: true; clicked => { Backend.ec-preset(1873); } }
+                        FButton { text: "0x078C 键盘"; kind: 0; expand: true; clicked => { Backend.ec-preset(1932); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FButton { text: "0x0767 RGB"; kind: 0; expand: true; clicked => { Backend.ec-preset(1895); } }
+                        FButton { text: "0x0769 颜色"; kind: 0; expand: true; clicked => { Backend.ec-preset(1897); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FButton { text: "0x0783 PL1"; kind: 0; expand: true; clicked => { Backend.ec-preset(1923); } }
+                        FButton { text: "0x0738 Tau"; kind: 0; expand: true; clicked => { Backend.ec-preset(1848); } }
+                    }
+
+                    Divider { }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "读取数量"; color: Theme.text-dim; font-size: 11.5px; vertical-alignment: center; horizontal-stretch: 1; }
+                        FButton { text: "−"; kind: 2; clicked => { Backend.ec-count = Backend.ec-count > 1 ? Backend.ec-count - 1 : 1; } }
+                        Text { text: Backend.ec-count; color: Theme.text; font-size: 12px; font-family: "monospace"; vertical-alignment: center; }
+                        FButton { text: "+"; kind: 2; clicked => { Backend.ec-count = Backend.ec-count < 32 ? Backend.ec-count + 1 : 32; } }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    FButton {
+                        text: "读取寄存器";
+                        kind: 1;
+                        clicked => { Backend.ec-read(); }
+                    }
+                }
+            }
+
+            // ------------------------------------------ 结果
+            FCard {
+                horizontal-stretch: 1;
+                pad: 18px;
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        Text { text: "读取结果"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                        Rectangle { horizontal-stretch: 1; }
+                        if Backend.ec-read-time != "": Badge { label: Backend.ec-read-time; tone: Theme.text-mute; }
+                        Badge { label: Backend.ec-count + " 字节"; tone: Theme.accent; }
+                    }
+
+                    Divider { }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "地址"; color: Theme.text-mute; font-size: 10px; width: 72px; }
+                        Text { text: "HEX"; color: Theme.text-mute; font-size: 10px; width: 40px; }
+                        Text { text: "DEC"; color: Theme.text-mute; font-size: 10px; width: 44px; }
+                        Text { text: "BIT7-0"; color: Theme.text-mute; font-size: 10px; horizontal-stretch: 1; }
+                    }
+
+                    Flickable {
+                        vertical-stretch: 1;
+                        content-width: self.width;
+                        content-height: max(self.height, list.preferred-height);
+
+                        list := VerticalLayout {
+                            spacing: 3px;
+                            alignment: start;
+
+                            for c in Backend.ec-cells: Rectangle {
+                                height: 30px;
+                                border-radius: 8px;
+                                background: Theme.surface-2;
+
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 12px;
+
+                                    Text {
+                                        text: c.addr;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        font-family: "monospace";
+                                        width: 72px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: c.hex;
+                                        color: c.value == 0 ? Theme.text-dim : Theme.accent;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        font-family: "monospace";
+                                        width: 40px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: c.value;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        font-family: "monospace";
+                                        width: 44px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: c.bits;
+                                        color: Theme.text-mute;
+                                        font-size: 11px;
+                                        font-family: "monospace";
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if Backend.ec-cells.length == 0: Text {
+                        text: "选择地址后点击「读取寄存器」";
+                        color: Theme.text-mute;
+                        font-size: 11.5px;
+                        vertical-stretch: 1;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------ 说明
+        FCard {
+            height: 96px;
+            pad: 16px;
+
+            HorizontalLayout {
+                spacing: 18px;
+
+                VerticalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 1;
+                    Text { text: "读取原理"; color: Theme.text; font-size: 12.5px; font-weight: 650; }
+                    Text {
+                        text: "扩展地址（>0xFF）通过标准 EC 空间的间接寻址访问：0x8A/0x8B 写地址、0x8C 置 FLAGS、0x8D/0x8E 读写数据，等待 DRDY 后取回。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 1;
+                    Text { text: "注意"; color: Theme.text; font-size: 12.5px; font-weight: 650; }
+                    Text {
+                        text: "此处仅做只读读取，不会写硬件。写入类操作请使用命令行并配合 --dry-run 与回读校验。";
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

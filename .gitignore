@@ -50,8 +50,10 @@ desktop.ini
 
 # ---- Rust 构建产物与编译输出 ----
 linux/firebat-cc-src/target/
+linux/firebat-cc-gui/target/
 # 单文件二进制由 `cargo build --release` 重新生成；如需入库用 `git add -f`
 linux/firebat-cc
+linux/firebat-cc-gui/firebat-cc-gui
 
 # ---- 保留小型可读配置与说明 ----
 !/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/setup.ini

@@ -1,0 +1,344 @@
+// 概览：当前模式 + 显卡 + 背光 + 连接状态 + 活动日志
+import { Theme } from "../theme.slint";
+import { Backend, Nav } from "../state.slint";
+import { FCard, FButton, Badge, ModeTile, ModeBars, KeyVal, FSlider, StatusPill, FIcon, Divider, VDivider } from "../widgets.slint";
+
+export component OverviewPage inherits Rectangle {
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 14px;
+
+        // ------------------------------------------------ 主状态卡
+        Rectangle {
+            height: 238px;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: @linear-gradient(150deg, Theme.surface 0%, Theme.surface-2 100%);
+
+            HorizontalLayout {
+                padding: 22px;
+                spacing: 18px;
+
+                VerticalLayout {
+                    spacing: 3px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "当前性能模式";
+                        color: Theme.text-mute;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1px;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: Backend.connected ? Backend.mode-name : "未连接";
+                            color: Theme.text;
+                            font-size: 30px;
+                            font-weight: 800;
+                        }
+                        Badge {
+                            label: "EC " + Backend.mode-bits;
+                            tone: Theme.accent;
+                        }
+                    }
+
+                    Text {
+                        text: Backend.connected ? Backend.status-detail : "启动 firebat-cc serve 守护进程后即可控制硬件";
+                        color: Theme.text-dim;
+                        font-size: 11.5px;
+                        overflow: TextOverflow.elide;
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ModeTile {
+                            title: "办公";
+                            caption: "低功耗、安静";
+                            bits: "0xA0";
+                            level: 1;
+                            active: Backend.mode-index == 1;
+                            horizontal-stretch: 1;
+                            clicked => { Backend.request-mode(1); }
+                        }
+                        ModeTile {
+                            title: "游戏";
+                            caption: "均衡调度";
+                            bits: "0x20";
+                            level: 2;
+                            active: Backend.mode-index == 2;
+                            horizontal-stretch: 1;
+                            clicked => { Backend.request-mode(2); }
+                        }
+                        ModeTile {
+                            title: "狂暴";
+                            caption: "风扇全开";
+                            bits: "0x30";
+                            level: 3;
+                            active: Backend.mode-index == 3;
+                            horizontal-stretch: 1;
+                            clicked => { Backend.request-mode(3); }
+                        }
+                    }
+                }
+
+                // 寄存器信息
+                Rectangle {
+                    width: 236px;
+                    border-radius: 12px;
+                    background: Theme.dark ? Theme.bg.transparentize(0.35) : Theme.surface-2;
+                    border-width: 1px;
+                    border-color: Theme.border;
+
+                    VerticalLayout {
+                        padding: 15px;
+                        spacing: 7px;
+
+                        Text {
+                            text: "模式寄存器 0x0751";
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                            font-family: "monospace";
+                        }
+
+                        Text {
+                            text: Backend.mode-raw >= 0 ? Backend.mode-bits : "--";
+                            color: Theme.accent;
+                            font-size: 26px;
+                            font-weight: 800;
+                            font-family: "monospace";
+                        }
+
+                        Rectangle { height: 2px; }
+
+                        KeyVal { key: "后端"; value: Backend.backend-name; }
+                        KeyVal {
+                            key: "风扇增强 BIT6";
+                            value: Backend.fan-boost ? "已开启" : "关闭";
+                            value-color: Backend.fan-boost ? Theme.accent : Theme.text-dim;
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            FButton {
+                                text: "重新读取";
+                                kind: 2;
+                                expand: true;
+                                clicked => { Backend.refresh(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------ 三张速览卡
+        HorizontalLayout {
+            spacing: 14px;
+            height: 126px;
+
+            FCard {
+                horizontal-stretch: 1;
+                interactive: true;
+                pad: 16px;
+                clicked => { Nav.page = 2; }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        FIcon { glyph: 2; tint: Theme.text-dim; }
+                        Text { text: "显卡输出"; color: Theme.text; font-size: 13px; font-weight: 650; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Badge {
+                            label: Backend.gpu-state == "hybrid" ? "混合" : Backend.gpu-state == "dgpu" ? "独显" : "未知";
+                            tone: Backend.gpu-state == "unknown" ? Theme.text-mute : Theme.ok;
+                        }
+                    }
+                    Text {
+                        text: Backend.gpu-state == "dgpu" ? "独显直连已生效（下次开机应用）" : Backend.gpu-state == "hybrid" ? "混合输出（核显显示 + 独显渲染）" : "尚未读取 UEFI 变量";
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        wrap: TextWrap.word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Text {
+                        text: Backend.gpu-raw >= 0 ? "OemDisplayMode = " + Backend.gpu-raw : "点击进入设置";
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        font-family: "monospace";
+                    }
+                }
+            }
+
+            FCard {
+                horizontal-stretch: 1;
+                interactive: true;
+                pad: 16px;
+                clicked => { Nav.page = 3; }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        FIcon { glyph: 3; tint: Theme.text-dim; }
+                        Text { text: "键盘背光"; color: Theme.text; font-size: 13px; font-weight: 650; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Badge {
+                            label: Backend.kb-disabled ? "已关闭" : (Backend.kb-rainbow ? "彩虹" : "常亮");
+                            tone: Backend.kb-disabled ? Theme.text-mute : Theme.accent;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            border-radius: 7px;
+                            background: Backend.kb-color;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                        }
+                        Text {
+                            text: "亮度 " + Backend.kb-brightness-level + " / " + Backend.kb-brightness-max + " 级";
+                            color: Theme.text-dim;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Text {
+                        text: "EC 通道 R" + Backend.kb-ec-r + " G" + Backend.kb-ec-g + " B" + Backend.kb-ec-b;
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        font-family: "monospace";
+                    }
+                }
+            }
+
+            FCard {
+                horizontal-stretch: 1;
+                pad: 16px;
+
+                VerticalLayout {
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        FIcon { glyph: 4; tint: Theme.text-dim; }
+                        Text { text: "守护进程"; color: Theme.text; font-size: 13px; font-weight: 650; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Badge {
+                            label: Backend.connected ? "已连接" : "未连接";
+                            tone: Backend.connected ? Theme.ok : Theme.danger;
+                        }
+                    }
+                    Text {
+                        text: Backend.socket-path;
+                        color: Theme.text-dim;
+                        font-size: 10.5px;
+                        font-family: "monospace";
+                        overflow: TextOverflow.elide;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: "模式键"; color: Theme.text-mute; font-size: 10.5px; vertical-alignment: center; }
+                        Text {
+                            text: Backend.listening ? "监听中" : (Backend.connected ? "未接管" : "未连接");
+                            color: Backend.listening ? Theme.ok : Theme.text-mute;
+                            font-size: 10.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: Backend.daemon-version != "" ? "v" + Backend.daemon-version : "v--";
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                            vertical-alignment: center;
+                            font-family: "monospace";
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        FButton {
+                            text: Backend.connected ? "刷新" : "重试连接";
+                            kind: 2;
+                            expand: true;
+                            clicked => { Backend.refresh(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------ 日志
+        FCard {
+            vertical-stretch: 1;
+            pad: 16px;
+
+            VerticalLayout {
+                spacing: 8px;
+
+                HorizontalLayout {
+                    Text { text: "活动日志"; color: Theme.text; font-size: 13px; font-weight: 650; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: Backend.log.length + " 条记录"; color: Theme.text-mute; font-size: 10.5px; }
+                }
+
+                Divider { }
+
+                Flickable {
+                    vertical-stretch: 1;
+                    content-width: self.width;
+                    content-height: max(self.height, list.preferred-height);
+
+                    list := VerticalLayout {
+                        spacing: 5px;
+                        alignment: start;
+                        for e in Backend.log: HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: e.time;
+                                color: Theme.text-mute;
+                                font-size: 10.5px;
+                                font-family: "monospace";
+                                width: 62px;
+                            }
+                            Rectangle {
+                                width: 5px;
+                                height: 5px;
+                                border-radius: 3px;
+                                y: (parent.height - self.height) / 2;
+                                background: e.kind == 3 ? Theme.danger : e.kind == 2 ? Theme.warn : e.kind == 1 ? Theme.ok : Theme.text-mute;
+                            }
+                            Text {
+                                text: e.text;
+                                color: e.kind == 3 ? Theme.danger : e.kind == 2 ? Theme.warn : Theme.text-dim;
+                                font-size: 11.5px;
+                                horizontal-stretch: 1;
+                                overflow: TextOverflow.elide;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if Backend.log.length == 0: Text {
+                            text: "暂无记录";
+                            color: Theme.text-mute;
+                            font-size: 11.5px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,678 @@
+// 基础组件：全部手绘，避免 std-widgets 的原生外观破坏整体视觉。
+import { Theme } from "theme.slint";
+
+// ---------------------------------------------------------------- 图标
+export component FIcon inherits Rectangle {
+    in property <int> glyph: 0; // 0 概览 1 性能 2 显卡 3 键盘 4 代码
+    in property <color> tint: Theme.text-dim;
+    width: 18px;
+    height: 18px;
+
+    if glyph == 0: Rectangle {
+        for i in 4: Rectangle {
+            x: (i == 0 || i == 2) ? 0px : 10px;
+            y: i < 2 ? 0px : 10px;
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            background: root.tint;
+        }
+    }
+
+    if glyph == 1: Rectangle {
+        for i in 3: Rectangle {
+            x: i * 7px;
+            width: 4px;
+            height: 6px + i * 5px;
+            y: root.height - self.height;
+            border-radius: 1.5px;
+            background: root.tint;
+        }
+    }
+
+    if glyph == 2: Rectangle {
+        Rectangle {
+            x: 0;
+            y: 1px;
+            width: 18px;
+            height: 12px;
+            border-radius: 2px;
+            border-width: 1.6px;
+            border-color: root.tint;
+        }
+        Rectangle {
+            x: 7px;
+            y: 14px;
+            width: 4px;
+            height: 2px;
+            background: root.tint;
+        }
+        Rectangle {
+            x: 4px;
+            y: 16px;
+            width: 10px;
+            height: 1.6px;
+            border-radius: 1px;
+            background: root.tint;
+        }
+    }
+
+    if glyph == 3: Rectangle {
+        Rectangle {
+            x: 0;
+            y: 3px;
+            width: 18px;
+            height: 12px;
+            border-radius: 3px;
+            border-width: 1.6px;
+            border-color: root.tint;
+        }
+        for i in 3: Rectangle {
+            x: 4px + i * 4px;
+            y: 7px;
+            width: 2px;
+            height: 2px;
+            border-radius: 1px;
+            background: root.tint;
+        }
+        Rectangle {
+            x: 5px;
+            y: 11px;
+            width: 8px;
+            height: 1.6px;
+            border-radius: 1px;
+            background: root.tint;
+        }
+    }
+
+    if glyph == 4: Rectangle {
+        for i in 3: Rectangle {
+            x: 0;
+            y: 3px + i * 5px;
+            width: i == 0 ? 12px : (i == 1 ? 16px : 9px);
+            height: 2px;
+            border-radius: 1px;
+            background: root.tint;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 徽章
+export component Badge inherits Rectangle {
+    in property <string> label: "";
+    in property <color> tone: Theme.text-dim;
+    in property <bool> solid: false;
+
+    property <length> w: t.preferred-width + 18px;
+    min-height: 22px;
+    preferred-height: 22px;
+    max-height: 22px;
+    min-width: self.w;
+    preferred-width: self.w;
+    max-width: self.w;
+    border-radius: 11px;
+    background: root.solid ? root.tone : root.tone.transparentize(0.88);
+    border-width: root.solid ? 0px : 1px;
+    border-color: root.tone.transparentize(0.72);
+
+    t := Text {
+        text: root.label;
+        width: root.width - 18px;
+        height: root.height;
+        x: 9px;
+        y: 0;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: TextOverflow.elide;
+        color: root.solid ? #100d08 : root.tone;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+    }
+}
+
+// ---------------------------------------------------------------- 按钮
+export component FButton inherits Rectangle {
+    in property <string> text: "";
+    in property <int> kind: 0; // 0 描边 1 主色 2 浅底 3 危险
+    in property <bool> enabled: true;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    property <length> w: label.preferred-width + 30px;
+    in property <bool> expand: false;
+
+    min-height: 34px;
+    preferred-height: 34px;
+    max-height: 34px;
+    min-width: self.w;
+    preferred-width: self.expand ? 0px : self.w;
+    max-width: self.expand ? 100000px : self.w;
+    horizontal-stretch: self.expand ? 1 : 0;
+    border-radius: 9px;
+    opacity: root.enabled ? 1 : 0.45;
+    background: root.kind == 1 ? (root.hover ? Theme.accent-2 : Theme.accent)
+              : root.kind == 2 ? (root.hover ? Theme.surface-3 : Theme.surface-2)
+              : root.kind == 3 ? (root.hover ? Theme.danger.transparentize(0.78) : Theme.danger.transparentize(0.88))
+              : root.hover ? Theme.surface-2 : transparent;
+    border-width: root.kind == 0 ? 1px : 0px;
+    border-color: Theme.border;
+    animate background { duration: 120ms; }
+    animate opacity { duration: 120ms; }
+
+    label := Text {
+        text: root.text;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        color: root.kind == 1 ? #1b1105 : root.kind == 3 ? Theme.danger : Theme.text;
+        font-size: 12.5px;
+        font-weight: 600;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        enabled: root.enabled;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+// ---------------------------------------------------------------- 卡片
+export component FCard inherits Rectangle {
+    in property <length> pad: 18px;
+    in property <bool> interactive: false;
+    in property <bool> flat: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    background: Theme.surface;
+    min-width: 0px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: root.interactive && root.hover ? Theme.accent : Theme.border;
+    drop-shadow-blur: root.flat ? 0px : 16px;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-offset-y: root.flat ? 0px : 3px;
+    animate border-color { duration: 130ms; }
+
+    if root.interactive: TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+
+    pad-area := Rectangle {
+        x: root.pad;
+        y: root.pad;
+        width: parent.width - 2 * root.pad;
+        height: parent.height - 2 * root.pad;
+        @children
+    }
+}
+
+// ---------------------------------------------------------------- 开关
+export component FToggle inherits Rectangle {
+    in property <bool> enabled: true;
+    in-out property <bool> checked: false;
+    in-out property <color> tint: Theme.accent;
+    callback toggled(bool);
+
+    width: 42px;
+    height: 23px;
+    border-radius: 12px;
+    background: root.checked ? root.tint : Theme.surface-3;
+    animate background { duration: 160ms; }
+
+    knob := Rectangle {
+        y: 3px;
+        width: 17px;
+        height: 17px;
+        border-radius: 9px;
+        x: root.checked ? root.width - self.width - 3px : 3px;
+        background: root.checked ? #ffffff : Theme.text-mute;
+        animate x { duration: 160ms; easing: ease-in-out; }
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 滑杆
+export component FSlider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <bool> enabled: true;
+    in property <color> tint: Theme.accent;
+    in-out property <float> value: 0;
+    callback changed(float);
+
+    height: 24px;
+    property <length> usable: root.width - 16px;
+    property <float> ratio: (root.maximum > root.minimum) ? ((root.value - root.minimum) / (root.maximum - root.minimum)) : 0;
+
+    function clamp01(v: float) -> float {
+        return v < 0 ? 0 : (v > 1 ? 1 : v);
+    }
+
+    function apply-x(mx: length) {
+        if (root.enabled && root.usable > 2px) {
+            root.value = root.minimum + root.clamp01((mx - 8px) / root.usable) * (root.maximum - root.minimum);
+            root.changed(root.value);
+        }
+    }
+
+    track := Rectangle {
+        x: 8px;
+        width: root.usable;
+        height: 5px;
+        y: (root.height - self.height) / 2;
+        border-radius: 3px;
+        background: Theme.surface-3;
+    }
+
+    fill := Rectangle {
+        x: 8px;
+        width: root.usable * root.ratio;
+        height: 5px;
+        y: (root.height - self.height) / 2;
+        border-radius: 3px;
+        background: root.enabled ? root.tint : Theme.text-mute;
+    }
+
+    handle := Rectangle {
+        width: 15px;
+        height: 15px;
+        border-radius: 8px;
+        x: 8px + root.usable * root.ratio - 7.5px;
+        y: (root.height - self.height) / 2;
+        background: Theme.surface;
+        border-width: 3.5px;
+        border-color: root.enabled ? root.tint : Theme.text-mute;
+        drop-shadow-blur: 5px;
+        drop-shadow-color: Theme.shadow;
+    }
+
+    TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        // 只在按下时取点；拖动由 moved 处理（仅在按住时触发）。
+        // 注意：pointer-event 的 move 事件在纯悬停时也会派发，不能用来改数值。
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.apply-x(self.mouse-x);
+            }
+        }
+        moved => {
+            root.apply-x(self.mouse-x);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 档位柱
+export component ModeBars inherits Rectangle {
+    in property <int> level: 1; // 1..4
+    in property <color> tint: Theme.accent;
+    in property <length> bar-width: 4px;
+
+    width: 19px;
+    height: 16px;
+
+    for i in 3: Rectangle {
+        x: i * (root.bar-width + 2px);
+        width: root.bar-width;
+        height: 6px + i * 5px;
+        y: root.height - self.height;
+        border-radius: 1.5px;
+        background: (i + 1) <= root.level ? root.tint : Theme.surface-3;
+    }
+}
+
+// ---------------------------------------------------------------- 模式磁贴
+export component ModeTile inherits Rectangle {
+    in property <string> title: "";
+    in property <string> caption: "";
+    in property <string> bits: "";
+    in property <int> level: 1;
+    in property <bool> active: false;
+    in property <bool> wide: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    height: root.wide ? 104px : 74px;
+    // 宽度交给布局均分：preferred 固定为同一值，三个磁贴的 stretch 又相同，
+    // 于是无论标题/说明文字长短，最终宽度都一致（不能写 width: parent.width，
+    // 那会和布局自身宽度形成绑定环）。
+    min-width: 0px;
+    preferred-width: 240px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : (root.hover ? Theme.text-mute : Theme.border);
+    background: root.active ? Theme.accent-soft : (root.hover ? Theme.surface-3 : Theme.surface-2);
+    animate background { duration: 140ms; }
+    animate border-color { duration: 140ms; }
+
+    VerticalLayout {
+        padding: root.wide ? 15px : 12px;
+        spacing: root.wide ? 8px : 5px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            ModeBars {
+                level: root.level;
+                tint: root.active ? Theme.accent : Theme.text-mute;
+            }
+
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: root.wide ? 16px : 13.5px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: root.active ? "使用中" : "";
+                color: Theme.accent;
+                font-size: 10.5px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.caption;
+            color: Theme.text-dim;
+            font-size: root.wide ? 11.5px : 10.5px;
+            wrap: TextWrap.word-wrap;
+            horizontal-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.bits;
+                color: Theme.text-mute;
+                font-size: 10.5px;
+                font-family: "monospace";
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+// ---------------------------------------------------------------- 侧栏项
+export component NavItem inherits Rectangle {
+    in property <string> label: "";
+    in property <int> glyph: 0;
+    in property <bool> active: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    height: 40px;
+    border-radius: 9px;
+    background: root.active ? Theme.accent-soft : (root.hover ? Theme.surface-2 : transparent);
+    animate background { duration: 130ms; }
+
+    Rectangle {
+        x: 0;
+        y: (parent.height - 16px) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 2px;
+        background: Theme.accent;
+        opacity: root.active ? 1 : 0;
+        animate opacity { duration: 130ms; }
+    }
+
+    FIcon {
+        x: 15px;
+        y: (parent.height - self.height) / 2;
+        glyph: root.glyph;
+        tint: root.active ? Theme.accent : Theme.text-dim;
+    }
+
+    Text {
+        x: 44px;
+        width: parent.width - 52px;
+        height: parent.height;
+        text: root.label;
+        color: root.active ? Theme.text : Theme.text-dim;
+        font-size: 13px;
+        font-weight: root.active ? 650 : 500;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+// ---------------------------------------------------------------- 键值行
+export component KeyVal inherits Rectangle {
+    in property <string> key: "";
+    in property <string> value: "";
+    in property <color> value-color: Theme.text;
+    in property <bool> mono: false;
+
+    min-height: 22px;
+    preferred-height: 22px;
+    max-height: 22px;
+
+    Text {
+        x: 0;
+        width: parent.width / 2;
+        height: parent.height;
+        text: root.key;
+        color: Theme.text-mute;
+        font-size: 11.5px;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width / 2;
+        width: parent.width / 2;
+        height: parent.height;
+        text: root.value;
+        color: root.value-color;
+        font-size: 11.5px;
+        font-family: root.mono ? "monospace" : "sans-serif";
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: TextOverflow.elide;
+    }
+}
+
+// ---------------------------------------------------------------- 状态点 + 文字
+export component StatusPill inherits Rectangle {
+    in property <bool> on: false;
+    in property <string> text: "";
+    in property <color> tone: Theme.text-dim;
+
+    property <length> w: label.preferred-width + 24px;
+    min-height: 24px;
+    preferred-height: 24px;
+    max-height: 24px;
+    min-width: self.w;
+    preferred-width: self.w;
+    max-width: self.w;
+    border-radius: 12px;
+    background: Theme.surface-2;
+
+    dot := Rectangle {
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        width: 7px;
+        height: 7px;
+        border-radius: 4px;
+        background: root.tone;
+    }
+
+    label := Text {
+        x: 22px;
+        y: 0;
+        width: self.preferred-width;
+        height: parent.height;
+        text: root.text;
+        color: root.tone;
+        font-size: 11px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+}
+
+// ---------------------------------------------------------------- 颜色预设
+export component Swatch inherits Rectangle {
+    in property <color> swatch: #ffffff;
+    in property <bool> selected: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    min-width: 30px;
+    preferred-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    preferred-height: 30px;
+    max-height: 30px;
+    border-radius: 9px;
+    background: root.swatch;
+    border-width: root.selected ? 2.5px : 1px;
+    border-color: root.selected ? Theme.text : (root.hover ? Theme.text-dim : Theme.border);
+    animate border-color { duration: 120ms; }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+// ---------------------------------------------------------------- 轻提示
+export component FToast inherits Rectangle {
+    in property <string> text: "";
+    in property <int> kind: 0;
+
+    height: 38px;
+    width: msg.preferred-width + 36px;
+    border-radius: 10px;
+    background: root.kind == 3 ? (Theme.dark ? #3a1b1b : #fdecec)
+              : root.kind == 2 ? (Theme.dark ? #3a301a : #fdf6e3)
+              : root.kind == 1 ? (Theme.dark ? #14332a : #e8f8f1)
+              : Theme.surface-3;
+    border-width: 1px;
+    border-color: root.kind == 3 ? Theme.danger.transparentize(0.55)
+                : root.kind == 2 ? Theme.warn.transparentize(0.55)
+                : root.kind == 1 ? Theme.ok.transparentize(0.55)
+                : Theme.border;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-offset-y: 6px;
+
+    msg := Text {
+        text: root.text;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        color: root.kind == 3 ? Theme.danger : root.kind == 2 ? Theme.warn : root.kind == 1 ? Theme.ok : Theme.text;
+        font-size: 12.5px;
+        font-weight: 600;
+    }
+}
+
+
+// ---------------------------------------------------------------- 分割线
+export component Divider inherits Rectangle {
+    background: Theme.border;
+    min-height: 1px;
+    preferred-height: 1px;
+    max-height: 1px;
+}
+
+export component VDivider inherits Rectangle {
+    background: Theme.border;
+    min-width: 1px;
+    preferred-width: 1px;
+    max-width: 1px;
+    vertical-stretch: 1;
+}
+
+// ---------------------------------------------------------------- 外观三态切换
+// 自动（跟随系统）/ 浅色 / 深色。选中段用主色填充，其余透明。
+component Seg inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> active: false;
+    callback clicked();
+
+    property <bool> hover: false;
+
+    horizontal-stretch: 1;
+    min-height: 22px;
+    border-radius: 6px;
+    background: root.active ? Theme.accent : (root.hover ? Theme.surface-3 : transparent);
+    animate background { duration: 120ms; }
+
+    Text {
+        text: root.label;
+        color: root.active ? #100d08 : Theme.text-dim;
+        font-size: 10.5px;
+        font-weight: root.active ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => { root.hover = self.has-hover; }
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ThemeSwitch inherits Rectangle {
+    in property <string> mode: "auto";
+    in property <bool> enabled: true;
+    callback picked(string);
+
+    preferred-height: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    border-radius: 9px;
+    background: Theme.surface-2;
+    border-width: 1px;
+    border-color: Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+
+        Seg { label: "自动"; active: root.mode == "auto"; clicked => { if (root.enabled) { root.picked("auto"); } } }
+        Seg { label: "浅色"; active: root.mode == "light"; clicked => { if (root.enabled) { root.picked("light"); } } }
+        Seg { label: "深色"; active: root.mode == "dark"; clicked => { if (root.enabled) { root.picked("dark"); } } }
+    }
+}

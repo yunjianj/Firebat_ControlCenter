@@ -1,0 +1,24 @@
+// 主题：默认「炭黑 + 余烬橙」，可切换浅色。
+// 颜色语义与 Windows 端控制中心一致：橙色 = 性能/激活。
+export global Theme {
+    in-out property <bool> dark: true;
+
+    out property <color> bg: dark ? #0d0f13 : #f3f5f8;
+    out property <color> surface: dark ? #14181f : #ffffff;
+    out property <color> surface-2: dark ? #1a1f27 : #eef1f6;
+    out property <color> surface-3: dark ? #242b36 : #e3e7ef;
+    out property <color> border: dark ? #232a35 : #dfe4ec;
+    out property <color> text: dark ? #e9edf5 : #11151c;
+    out property <color> text-dim: dark ? #8f99ab : #5f6877;
+    out property <color> text-mute: dark ? #5b6473 : #9aa2af;
+    out property <color> accent: dark ? #ff8a3d : #db5a1f;
+    out property <color> accent-2: dark ? #ffb571 : #f08a3c;
+    out property <color> accent-soft: dark ? #35200f : #ffe9da;
+    out property <color> ok: dark ? #37d99b : #0d9a58;
+    out property <color> warn: dark ? #f5c451 : #b37800;
+    out property <color> danger: dark ? #ff6b6b : #cf3535;
+    out property <color> ok-soft: dark ? #10291f : #e7f7ef;
+    out property <color> warn-soft: dark ? #2f2712 : #fdf4df;
+    out property <color> danger-soft: dark ? #2f1616 : #fde9e9;
+    out property <color> shadow: dark ? rgba(0, 0, 0, 0.55) : rgba(18, 28, 45, 0.10);
+}
