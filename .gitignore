@@ -19,6 +19,8 @@ desktop.ini
 /target/
 # 单文件二进制由 `cargo build --release` 重新生成；如需入库用 `git add -f`
 /firebat-cc
+/firebat-cc-gui
+/gui/firebat-cc
 /gui/firebat-cc-gui
 
 # ---- 逆向参考素材（reference/windows） ----

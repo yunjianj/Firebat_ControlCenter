@@ -4,13 +4,18 @@
 //! 通信（协议见 `docs/serve-协议.md`），因此 GUI 进程**不需要 root**。
 //!
 //! 用法：
-//!   sudo modprobe ec_sys write_support=1
-//!   sudo ./firebat-cc serve
 //!   ./firebat-cc-gui [--socket /run/firebat-cc.sock]
+//!   未连接后端时自动通过 pkexec 启动同目录的 firebat-cc serve。
 
 slint::include_modules!();
 
 mod client;
+mod daemon;
+mod tray;
+mod osd;
+mod desktop;
+mod instance;
+mod window;
 
 use client::Client;
 use serde_json::{Map, Value};
@@ -139,6 +144,7 @@ fn run_cmd<F>(
 fn apply_status(ui: &AppWindow, data: &Value) {
     let b = ui.global::<Backend>();
     let idx = data.get("mode").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    osd::observe(idx);
     let name = data
         .get("name")
         .and_then(|v| v.as_str())
@@ -312,6 +318,7 @@ fn do_set_mode(weak: Weak<AppWindow>, cli: Arc<Client>, idx: i32) {
             ui.global::<Backend>().set_busy(false);
             match res {
                 Ok(data) => {
+                    osd::confirm(data.get("mode").and_then(|mode| mode.as_i64()).unwrap_or(idx as i64) as i32);
                     apply_status(ui, &data);
                     let name = mode_name(idx);
                     toast(ui, format!("已切换到「{name}」档"), 1);
@@ -455,7 +462,7 @@ fn do_refresh(weak: Weak<AppWindow>, cli: Arc<Client>) {
             Err(e) => {
                 b.set_connected(false);
                 push_log(ui, format!("守护进程不可用：{e}"), 3);
-                toast(ui, "未连接到守护进程：请先在终端运行 sudo firebat-cc serve", 3);
+                toast(ui, format!("未连接到守护进程：{e}"), 3);
             }
         }
     });
@@ -514,6 +521,7 @@ fn handle_event(ui: &AppWindow, ev: Value, cli: Arc<Client>) {
                 .and_then(|n| n.as_str())
                 .unwrap_or("?")
                 .to_string();
+            osd::confirm(idx);
             {
                 // 先就地更新，界面立刻响应；随后拉一次 status 校正 bits/detail
                 let b = ui.global::<Backend>();
@@ -917,7 +925,7 @@ fn init_theme(ui: &AppWindow) -> String {
 /// 用于真机排查（不需要图形环境）：`firebat-cc-gui --self-test [--socket PATH]`
 fn self_test(socket: &std::path::Path) -> Result<(), String> {
     let (tx, _rx) = mpsc::channel();
-    let cli = Client::new(socket.to_path_buf(), tx);
+    let cli = Client::new(socket.to_path_buf(), tx, client::resolve_auth_token()?);
     println!("socket: {}", socket.display());
 
     let color = |v: &Value| -> (i64, i64, i64) {
@@ -957,6 +965,13 @@ fn self_test(socket: &std::path::Path) -> Result<(), String> {
 
 fn main() -> Result<(), slint::PlatformError> {
     let path = client::resolve_socket_path();
+    if std::env::args().any(|arg| arg == "--install-desktop") {
+        match desktop::register() {
+            Ok(()) => println!("Firebat 桌面入口与图标已注册"),
+            Err(e) => { eprintln!("桌面注册失败：{e}"); std::process::exit(1); }
+        }
+        return Ok(());
+    }
 
     // 外观诊断：打印配置文件、系统探测结果与最终解析，便于排查"跟随系统不生效"
     if std::env::args().any(|a| a == "--print-theme") {
@@ -980,10 +995,23 @@ fn main() -> Result<(), slint::PlatformError> {
         std::process::exit(code);
     }
 
+    let token = window::take_environment_token();
+    let mut instance = match instance::Instance::claim(std::env::args().any(|arg| arg == "--toggle-window"), token.clone()) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return Ok(()),
+        Err(e) => { eprintln!("GUI 激活失败：{e}"); std::process::exit(1); }
+    };
+    window::set_token(token);
     let (tx, rx) = mpsc::channel::<Value>();
-    let cli = Arc::new(Client::new(path.clone(), tx));
+    let auth_token = client::resolve_auth_token().unwrap_or_else(|e| { eprintln!("凭证配置错误：{e}"); std::process::exit(1); });
+    let cli = Arc::new(Client::new(path.clone(), tx, auth_token));
+    let daemon_session = Arc::new(daemon::Session::default());
 
+    osd::install_backend()?;
+    let desktop_result = desktop::register();
     let ui = AppWindow::new()?;
+    osd::init(&ui)?;
+    let running = Arc::new(AtomicBool::new(true));
 
     {
         let b = ui.global::<Backend>();
@@ -1034,9 +1062,10 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = ui.as_weak();
         let tm = theme_mode.clone();
+        let running = running.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(5));
-            if weak.upgrade().is_none() {
+            if !running.load(Ordering::Acquire) {
                 break;
             }
             let auto = tm.lock().map(|m| m.as_str() == "auto").unwrap_or(false);
@@ -1063,13 +1092,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     push_log(&ui, format!("界面已启动，socket: {}", path.display()), 0);
-    if !path.exists() {
-        push_log(
-            &ui,
-            "未找到 socket：请先运行 sudo firebat-cc serve（需 modprobe ec_sys write_support=1）",
-            2,
-        );
-    }
+    if let Err(e) = desktop_result { push_log(&ui, format!("桌面图标注册失败：{e}"), 2); }
+    push_log(&ui, "正在连接后端；未运行时将请求系统授权并自动启动同目录后端", 0);
+    let starting = Arc::new(AtomicBool::new(true));
 
     // 事件转发（hello / mode-changed）——mode-changed 由守护进程在监听模式下推送
     {
@@ -1092,10 +1117,15 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = ui.as_weak();
         let cli = cli.clone();
+        let starting = starting.clone();
+        let running = running.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(4000));
-            if weak.upgrade().is_none() {
+            if !running.load(Ordering::Acquire) {
                 break;
+            }
+            if starting.load(Ordering::Acquire) {
+                continue;
             }
             let res = cli.call("status", Map::new());
             let ok = res.is_ok();
@@ -1127,13 +1157,49 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    ui.global::<Backend>().invoke_refresh();
-    let r = ui.run();
+    {
+        let weak = ui.as_weak();
+        let cli = cli.clone();
+        ui.global::<Backend>().set_busy(true);
+        let session = daemon_session.clone();
+        std::thread::spawn(move || {
+            let result = daemon::ensure_running(&path, &cli, &session);
+            let _ = slint::invoke_from_event_loop(move || {
+                starting.store(false, Ordering::Release);
+                let Some(ui) = weak.upgrade() else { return };
+                ui.global::<Backend>().set_busy(false);
+                match result {
+                    Ok(started) => {
+                        push_log(&ui, if started { "后端已自动启动" } else { "已找到运行中的后端" }, 1);
+                        do_refresh(ui.as_weak(), cli);
+                    }
+                    Err(e) => {
+                        ui.global::<Backend>().set_connected(false);
+                        push_log(&ui, e.clone(), 3);
+                        toast(&ui, e, 3);
+                    }
+                }
+            });
+        });
+    }
+    let tray = tray::Controller::start(&ui);
+    tray::install_close_handler(&ui, tray.available());
+    instance.listen(&ui);
+    ui.show()?;
+    // hide 最后一个窗口时仍运行；仅托盘菜单退出或无托盘时关闭窗口才结束。
+    let r = slint::run_event_loop_until_quit();
+    running.store(false, Ordering::Release);
+    osd::shutdown();
+    drop(tray);
 
     // 退出前主动示意取消监听：正常情况下守护进程会随连接断开自动摘除，
     // 这里再显式关一次，避免守护进程保留了空 owner（老版本守护进程也兼容）。
-    let mut params = Map::new();
-    params.insert("enable".to_string(), Value::Bool(false));
-    let _ = cli.call("listen", params);
+    if !daemon_session.is_owned() {
+        let mut params = Map::new();
+        params.insert("enable".to_string(), Value::Bool(false));
+        let _ = cli.call("listen", params);
+    }
+    if let Err(e) = daemon_session.stop() { eprintln!("关闭 GUI 后端：{e}"); }
+    cli.disconnect();
     r
 }

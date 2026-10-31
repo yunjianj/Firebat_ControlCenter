@@ -48,7 +48,7 @@ export component OverviewPage inherits Rectangle {
                     }
 
                     Text {
-                        text: Backend.connected ? Backend.status-detail : "启动 firebat-cc serve 守护进程后即可控制硬件";
+                        text: Backend.connected ? Backend.status-detail : "等待后端连接，启动结果可在活动日志中查看";
                         color: Theme.text-dim;
                         font-size: 11.5px;
                         overflow: TextOverflow.elide;

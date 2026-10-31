@@ -43,6 +43,104 @@ pub fn resolve_socket_path() -> PathBuf {
     PathBuf::from(DEFAULT_SOCKET)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn credential_on_every_request_reconnect_and_close() {
+        let dir = std::env::temp_dir().join(format!("firebat-client-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mock.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for connection in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                for _ in 0..2 {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let req: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(req["token"], "private-test-credential");
+                    let response =
+                        json!({"id": req["id"], "ok":true, "data":{}}).to_string() + "\n";
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                if connection == 1 {
+                    let mut line = String::new();
+                    assert_eq!(
+                        reader.read_line(&mut line).unwrap(),
+                        0,
+                        "退出客户端必须断开 socket"
+                    );
+                }
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            finished_tx.send(()).unwrap();
+        });
+        let (events, _) = mpsc::channel();
+        let client = Client::new(path.clone(), events, None);
+        client.set_auth_token("private-test-credential".into());
+        let mut supplied = Map::new();
+        supplied.insert(
+            "token".into(),
+            Value::String("cannot-override-session".into()),
+        );
+        client.call("help", supplied).unwrap();
+        client.call("status", Map::new()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !client
+            .conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .dead
+            .load(Ordering::Relaxed)
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        client.call("listen", Map::new()).unwrap();
+        client.call("help", Map::new()).unwrap();
+        client.disconnect();
+        finished_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+}
+
+pub fn resolve_auth_token() -> Result<Option<String>, String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--auth-token" {
+            let token = args.next().ok_or("--auth-token 缺少参数")?;
+            if token.is_empty() || token.starts_with("--") {
+                return Err("--auth-token 需要非空凭证，且不能以 -- 开头".into());
+            }
+            return Ok(Some(token));
+        }
+        if let Some(token) = arg.strip_prefix("--auth-token=") {
+            if token.is_empty() {
+                return Err("--auth-token 需要非空凭证".into());
+            }
+            return Ok(Some(token.into()));
+        }
+    }
+    match std::env::var("FIREBAT_CC_TOKEN") {
+        Ok(token) if token.is_empty() => Err("FIREBAT_CC_TOKEN 不能为空".into()),
+        Ok(token) => Ok(Some(token)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(_) => Err("FIREBAT_CC_TOKEN 不是有效 UTF-8".into()),
+    }
+}
+
 struct Conn {
     writer: Mutex<UnixStream>,
     /// 等待响应的调用方，key 是请求 id
@@ -65,25 +163,37 @@ pub struct Client {
     conn: Mutex<Option<Arc<Conn>>>,
     next_id: AtomicU64,
     events: Mutex<Option<Sender<Value>>>,
+    auth_token: Mutex<Option<String>>,
 }
 
 impl Client {
-    pub fn new(path: PathBuf, events: Sender<Value>) -> Client {
+    pub fn new(path: PathBuf, events: Sender<Value>, auth_token: Option<String>) -> Client {
         Client {
             path,
             conn: Mutex::new(None),
             next_id: AtomicU64::new(1),
             events: Mutex::new(Some(events)),
+            auth_token: Mutex::new(auth_token),
+        }
+    }
+
+    pub fn set_auth_token(&self, token: String) {
+        *self.auth_token.lock().unwrap_or_else(|e| e.into_inner()) = Some(token);
+    }
+    pub fn disconnect(&self) {
+        if let Some(conn) = self.conn.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            conn.dead.store(true, Ordering::Relaxed);
+            conn.fail_pending("GUI 正在退出");
+            if let Ok(writer) = conn.writer.lock() {
+                let _ = writer.shutdown(std::net::Shutdown::Both);
+            }
         }
     }
 
     fn connect(&self) -> Result<Arc<Conn>, String> {
         // 没有 socket 文件时给出更明确的提示
         if !self.path.exists() {
-            return Err(format!(
-                "守护进程未运行（{} 不存在）",
-                self.path.display()
-            ));
+            return Err(format!("守护进程未运行（{} 不存在）", self.path.display()));
         }
         let stream = UnixStream::connect(&self.path)
             .map_err(|e| format!("连接 {} 失败: {e}", self.path.display()))?;
@@ -175,6 +285,14 @@ impl Client {
         obj.insert("cmd".to_string(), json!(cmd));
         for (k, v) in params {
             obj.insert(k, v);
+        }
+        if let Some(token) = self
+            .auth_token
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            obj.insert("token".into(), Value::String(token.clone()));
         }
         let mut line = Value::Object(obj).to_string();
         line.push('\n');

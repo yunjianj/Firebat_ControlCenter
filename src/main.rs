@@ -41,11 +41,14 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::raw::{c_int, c_ulong};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 // efivarfs 文件默认带 immutable 标志（写前需清除，写后恢复）
 extern "C" {
     fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    fn flock(fd: c_int, operation: c_int) -> c_int;
+    fn signal(sig: c_int, handler: usize) -> usize;
 }
 const FS_IOC_GETFLAGS: c_ulong = 0x8008_6601;
 const FS_IOC_SETFLAGS: c_ulong = 0x4008_6602;
@@ -614,9 +617,15 @@ struct Args {
     hybrid_value: u8,
     dgpu_value: u8,
     positional: Vec<String>,
+    auth_token: Option<String>,
+    exit_on_stdin_close: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
+    parse_argv(std::env::args().skip(1).collect())
+}
+
+fn parse_argv(argv: Vec<String>) -> Result<Args, String> {
     let mut backend = BackendSel::Auto;
     let mut mode_reg = MODE_REG_DEFAULT;
     let mut dry_run = false;
@@ -626,7 +635,8 @@ fn parse_args() -> Result<Args, String> {
     let mut hybrid_value = MUX_HYBRID_DEFAULT;
     let mut dgpu_value = MUX_DGPU_DEFAULT;
     let mut positional: Vec<String> = Vec::new();
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut auth_token = None;
+    let mut exit_on_stdin_close = false;
 
     let mut i = 0;
     while i < argv.len() {
@@ -666,7 +676,16 @@ fn parse_args() -> Result<Args, String> {
                 let v = argv.get(i).ok_or("--dgpu-value 缺少参数")?;
                 dgpu_value = parse_hex_u16(v).map_err(|_| format!("无效值: {v}"))? as u8;
             }
+            "--auth-token" => {
+                i += 1;
+                let v = argv.get(i).ok_or("--auth-token 缺少参数")?;
+                if v.is_empty() || v.starts_with("--") {
+                    return Err("--auth-token 需要非空凭证，且不能以 -- 开头".into());
+                }
+                auth_token = Some(v.clone());
+            }
             "--dry-run" => dry_run = true,
+            "--exit-on-stdin-close" => exit_on_stdin_close = true,
             "--json" => json = true,
             "--interval" => {
                 i += 1;
@@ -689,7 +708,15 @@ fn parse_args() -> Result<Args, String> {
         i += 1;
     }
 
+    if auth_token.is_some() && positional.first().map(String::as_str) != Some("serve") {
+        return Err("--auth-token 仅适用于 serve".into());
+    }
+    if exit_on_stdin_close && positional.first().map(String::as_str) != Some("serve") {
+        return Err("--exit-on-stdin-close 仅适用于 serve".into());
+    }
     Ok(Args {
+        auth_token,
+        exit_on_stdin_close,
         backend,
         mode_reg,
         dry_run,
@@ -716,7 +743,7 @@ fn print_help() {
   firebat-cc status                        查看当前性能模式
   firebat-cc mode <MODE>                   切换性能模式
   firebat-cc listen                        监听模式：检测性能模式键并按序切换
-  firebat-cc serve [SOCKET]                守护模式：Unix socket JSON 接口（前端用）
+  firebat-cc serve [SOCKET] [--auth-token TOKEN]  守护模式：自动加载 ec_sys、开启写支持，退出时关闭
   firebat-cc ec-read <ADDR> [COUNT]        读取 EC 寄存器（调试用，16 进制地址）
   firebat-cc gpu status                    查看显卡输出模式（MUX）
   firebat-cc gpu hybrid                    切换为混合输出（重启生效）
@@ -742,11 +769,14 @@ COLOR 取值: RRGGBB 十六进制（如 ff8000）或名称:
   --dgpu-value <n>                              独显直连对应值覆盖（默认 1）
   --dry-run                                     只显示将要执行的操作，不实际写入
   --json                                        以 JSON 输出结果（前端/脚本集成用）
+  --auth-token <TOKEN>                          serve 每条请求必须携带相同 token（默认不验证）
+  --exit-on-stdin-close                         serve 在标准输入关闭时正常退出（GUI 生命周期绑定）
   --interval <ms>                               listen 轮询间隔（默认 300，50-5000）
   -h, --help                                    显示帮助
   -v, --version                                 显示版本
 
 示例:
+  sudo firebat-cc serve                   # 自动准备 ec_sys，Ctrl+C / SIGTERM 退出关闭写支持
   sudo modprobe ec_sys write_support=1     # ec-direct 性能模式后端需要
   sudo firebat-cc status
   sudo firebat-cc mode turbo
@@ -1756,7 +1786,8 @@ fn jp_value(b: &[char], i: usize) -> Result<(J, usize), String> {
                             't' => s.push('\t'),
                             'r' => s.push('\r'),
                             'u' => {
-                                let hex: String = b[i + 1..i + 5].iter().collect();
+                                let digits = b.get(i + 1..i + 5).ok_or("JSON \\u 转义未闭合")?;
+                                let hex: String = digits.iter().collect();
                                 let cp = u32::from_str_radix(&hex, 16)
                                     .map_err(|_| "JSON \\u 转义无效".to_string())?;
                                 if let Some(c) = char::from_u32(cp) {
@@ -1989,6 +2020,94 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
+const EC_WRITE_SUPPORT_PATH: &str = "/sys/module/ec_sys/parameters/write_support";
+static SERVE_STOP: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn serve_stop_signal(_: c_int) {
+    // 信号处理器只设置标志；sysfs 写入与等待请求结束均由主线程执行。
+    SERVE_STOP.store(true, Ordering::Relaxed);
+}
+
+struct ServeSignals(Vec<(c_int, usize)>);
+
+impl ServeSignals {
+    fn install() -> Result<Self, String> {
+        SERVE_STOP.store(false, Ordering::Relaxed);
+        let mut guard = Self(Vec::new());
+        for sig in [2, 15, 1] { // SIGINT、SIGTERM、SIGHUP（Linux）
+            let old = unsafe { signal(sig, serve_stop_signal as *const () as usize) };
+            if old == usize::MAX {
+                return Err(format!("安装退出信号 {sig} 失败: {}", std::io::Error::last_os_error()));
+            }
+            guard.0.push((sig, old));
+        }
+        Ok(guard)
+    }
+}
+
+impl Drop for ServeSignals {
+    fn drop(&mut self) {
+        for &(sig, old) in &self.0 {
+            unsafe { signal(sig, old); }
+        }
+    }
+}
+
+/// 写支持是内核全局开关，服务退出时始终关闭（包括原先已开启的情况）。
+struct EcSysWriteGuard {
+    parameter: PathBuf,
+    active: bool,
+}
+
+impl EcSysWriteGuard {
+    fn prepare(parameter: &Path, load: impl FnOnce() -> Result<(), String>) -> Result<Self, String> {
+        match std::fs::read_to_string(parameter) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => load()?,
+            Err(e) => return Err(format!("读取 {} 失败: {e}", parameter.display())),
+        }
+        // 从此处起所有错误都经过 Drop，避免加载成功但后续启动失败遗留写权限。
+        let guard = Self { parameter: parameter.into(), active: true };
+        guard.set_enabled(true)?;
+        Ok(guard)
+    }
+
+    fn set_enabled(&self, enabled: bool) -> Result<(), String> {
+        std::fs::write(&self.parameter, if enabled { b"Y\n" } else { b"N\n" })
+            .map_err(|e| format!("设置 {} 失败: {e}（需要 root，内核须允许修改参数）", self.parameter.display()))?;
+        let actual = std::fs::read_to_string(&self.parameter)
+            .map_err(|e| format!("回读 {} 失败: {e}", self.parameter.display()))?;
+        if actual.trim() != if enabled { "Y" } else { "N" } {
+            return Err(format!("{} 回读校验失败: {actual:?}", self.parameter.display()));
+        }
+        Ok(())
+    }
+
+    fn disable(&mut self) -> Result<(), String> {
+        self.set_enabled(false)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for EcSysWriteGuard {
+    fn drop(&mut self) {
+        if self.active {
+            if let Err(e) = self.disable() {
+                eprintln!("警告: 关闭 ec_sys 写支持失败: {e}\n请手动执行: sudo sh -c 'echo N > {EC_WRITE_SUPPORT_PATH}'");
+            }
+        }
+    }
+}
+
+struct ServeSocket(PathBuf);
+
+impl Drop for ServeSocket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 struct ListenState {
     /// 开启监听的连接 id 集合。
     ///
@@ -2007,11 +2126,22 @@ impl ListenState {
     }
 }
 
-fn serve_broadcast(clients: &Mutex<Vec<UnixStream>>, ev: &J) {
+fn serve_broadcast(clients: &Mutex<Vec<(u64, UnixStream)>>, ev: &J) {
     let mut line = ev.dump();
     line.push('\n');
     let mut cs = clients.lock().unwrap();
-    cs.retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
+    cs.retain_mut(|(_, s)| s.write_all(line.as_bytes()).is_ok());
+}
+
+/// 每条请求独立校验；成功一次不会免除后续请求的验证。
+fn serve_authorized(req: &J, expected: Option<&str>) -> bool {
+    let Some(expected) = expected else { return true; };
+    let Some(actual) = req.get("token").and_then(J::as_str) else { return false; };
+    // 避免按首个不同字节提前返回；长度不是秘密。
+    if actual.len() != expected.len() {
+        return false;
+    }
+    actual.bytes().zip(expected.bytes()).fold(0u8, |diff, (a, b)| diff | (a ^ b)) == 0
 }
 
 fn serve_handle(
@@ -2025,6 +2155,9 @@ fn serve_handle(
     let ok_resp = |data: J| J::o(vec![("id", id.clone()), ("ok", J::B(true)), ("data", data)]);
     let err_resp = |msg: &str| J::o(vec![("id", id.clone()), ("ok", J::B(false)), ("error", J::s(msg))]);
 
+    if !serve_authorized(req, args.auth_token.as_deref()) {
+        return err_resp("认证失败：缺少或无效的 token");
+    }
     let Some(cmd) = req.get("cmd").and_then(|v| v.as_str()) else {
         return err_resp("缺少 cmd 字段");
     };
@@ -2109,11 +2242,42 @@ fn serve_handle(
 }
 
 fn cmd_serve(args: &Args) {
-    if args.backend == BackendSel::PlatformProfile {
-        die("serve 仅支持 ec-direct 后端");
+    if let Err(e) = run_serve(args) {
+        // run_serve 的资源已析构；不可在持有写权限 guard 时调用 process::exit。
+        die(&e);
     }
+}
+
+fn run_serve(args: &Args) -> Result<(), String> {
+    if args.backend == BackendSel::PlatformProfile {
+        return Err("serve 仅支持 ec-direct 后端".into());
+    }
+    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true)
+        .open("/run/firebat-cc-ec.lock")
+        .map_err(|e| format!("打开服务锁失败: {e}（请以 root 运行）"))?;
+    if unsafe { flock(lock.as_raw_fd(), 2 | 4) } != 0 { // LOCK_EX | LOCK_NB
+        return Err(format!("无法独占 ec_sys 服务锁，可能已有 serve 正在运行: {}", std::io::Error::last_os_error()));
+    }
+    // 锁文件不可 unlink：保持 inode 稳定，文件描述符关闭自动解锁。
+    let _signals = ServeSignals::install()?;
+    if args.exit_on_stdin_close {
+        std::thread::spawn(|| {
+            wait_for_input_close(std::io::stdin().lock());
+            SERVE_STOP.store(true, Ordering::Release);
+        });
+    }
+    let mut ec_write = EcSysWriteGuard::prepare(Path::new(EC_WRITE_SUPPORT_PATH), || {
+        let output = std::process::Command::new("modprobe")
+            .args(["ec_sys", "write_support=1"]).output()
+            .map_err(|e| format!("执行 modprobe ec_sys write_support=1 失败: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("加载 ec_sys 失败（{}）: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
+        }
+        Ok(())
+    })?;
     let socket_path = PathBuf::from(args.positional.get(1).cloned().unwrap_or_else(|| "/run/firebat-cc.sock".into()));
-    let ec = Arc::new(Mutex::new(EcBackend::open(args.mode_reg).unwrap_or_else(|e| die(&e))));
+    let ec = Arc::new(Mutex::new(EcBackend::open(args.mode_reg)
+        .map_err(|e| format!("{e}\n若 debugfs 尚未挂载，请执行: sudo mount -t debugfs debugfs /sys/kernel/debug"))?));
 
     let _ = std::fs::remove_file(&socket_path);
     if let Some(parent) = socket_path.parent() {
@@ -2122,10 +2286,15 @@ fn cmd_serve(args: &Args) {
         }
     }
     let listener = UnixListener::bind(&socket_path)
-        .unwrap_or_else(|e| die(&format!("绑定 {} 失败: {e}", socket_path.display())));
-    let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
+        .map_err(|e| format!("绑定 {} 失败: {e}", socket_path.display()))?;
+    let _socket = ServeSocket(socket_path.clone());
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666))
+        .map_err(|e| format!("设置 socket 权限失败: {e}"))?;
+    listener.set_nonblocking(true).map_err(|e| format!("设置非阻塞监听失败: {e}"))?;
+    // 请求与轮询持读锁；退出持写锁，等待硬件操作结束后才关闭写支持。
+    let operations = Arc::new(std::sync::RwLock::new(()));
 
-    let clients: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
+    let clients: Arc<Mutex<Vec<(u64, UnixStream)>>> = Arc::new(Mutex::new(Vec::new()));
     let ls: Arc<Mutex<ListenState>> = Arc::new(Mutex::new(ListenState {
         owners: std::collections::HashSet::new(),
         current: Mode::Office,
@@ -2134,8 +2303,11 @@ fn cmd_serve(args: &Args) {
 
     println!("firebat-cc serve 已启动: {}", socket_path.display());
     println!("协议: 每行一个 JSON 请求，如 {{\"id\":1,\"cmd\":\"status\"}}；先发 help 查看命令");
+    if args.auth_token.is_some() {
+        println!("访问验证已开启：每条请求必须携带 token 字段；验证前不推送模式事件。");
+    }
     println!("监听事件推送形如 {{\"event\":\"mode-changed\",\"from\":...,\"to\":...}}");
-    println!("Ctrl+C 退出。");
+    println!("ec_sys 写支持已开启；Ctrl+C / SIGTERM 退出时关闭写支持。");
 
     // 模式监听轮询线程
     {
@@ -2144,8 +2316,13 @@ fn cmd_serve(args: &Args) {
         let ls2 = ls.clone();
         let mode_reg = args.mode_reg;
         let interval = args.interval;
+        let operations2 = operations.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(interval));
+            let _operation = operations2.read().unwrap();
+            if SERVE_STOP.load(Ordering::Relaxed) {
+                break;
+            }
             let enabled = ls2.lock().map(|l| l.enabled()).unwrap_or(false);
             if !enabled {
                 continue;
@@ -2177,6 +2354,7 @@ fn cmd_serve(args: &Args) {
                     ),
                 ]))
             })();
+            drop(_operation);
             if let Some(ev) = ev {
                 serve_broadcast(&clients2, &ev);
             }
@@ -2185,22 +2363,39 @@ fn cmd_serve(args: &Args) {
 
     // 接受连接
     let mut next_conn: u64 = 1;
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+    let mut result = Ok(());
+    while !SERVE_STOP.load(Ordering::Relaxed) {
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                result = Err(format!("接受连接失败: {e}"));
+                break;
+            }
+        };
         let conn_id = next_conn;
         next_conn += 1;
-        if let Ok(clone) = stream.try_clone() {
-            clients.lock().unwrap().push(clone);
+        let clients2 = clients.clone();
+        if args.auth_token.is_none() {
+            if let Ok(clone) = stream.try_clone() {
+                clients2.lock().unwrap().push((conn_id, clone));
+            }
         }
         let ec2 = ec.clone();
         let ls2 = ls.clone();
         let args2 = args.clone();
+        let operations2 = operations.clone();
         std::thread::spawn(move || {
             let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.0\"}\n");
             let mut reader = std::io::BufReader::new(match stream.try_clone() {
                 Ok(r) => r,
                 Err(_) => return,
             });
+            let mut registered = args2.auth_token.is_none();
             let mut line = String::new();
             loop {
                 line.clear();
@@ -2211,14 +2406,27 @@ fn cmd_serve(args: &Args) {
                 if line.trim().is_empty() {
                     continue;
                 }
+                let operation = operations2.read().unwrap();
+                if SERVE_STOP.load(Ordering::Relaxed) {
+                    break;
+                }
                 let resp = match jparse(&line) {
-                    Ok(req) => serve_handle(&req, &ec2, &ls2, &args2, conn_id),
+                    Ok(req) => {
+                        if !registered && serve_authorized(&req, args2.auth_token.as_deref()) {
+                            if let Ok(clone) = stream.try_clone() {
+                                clients2.lock().unwrap().push((conn_id, clone));
+                                registered = true;
+                            }
+                        }
+                        serve_handle(&req, &ec2, &ls2, &args2, conn_id)
+                    }
                     Err(e) => J::o(vec![
                         ("id", J::Null),
                         ("ok", J::B(false)),
                         ("error", J::s(&format!("JSON 解析失败: {e}"))),
                     ]),
                 };
+                drop(operation);
                 let mut out = resp.dump();
                 out.push('\n');
                 if stream.write_all(out.as_bytes()).is_err() {
@@ -2230,14 +2438,138 @@ fn cmd_serve(args: &Args) {
             if let Ok(mut lsg) = ls2.lock() {
                 lsg.owners.remove(&conn_id);
             }
-            // 断开的客户端在下次广播时由 serve_broadcast 的 retain 自动剔除
+            clients2.lock().unwrap().retain(|(id, _)| *id != conn_id);
         });
+    }
+    SERVE_STOP.store(true, Ordering::Relaxed);
+    let _operation = operations.write().unwrap();
+    ec_write.disable()?;
+    println!("firebat-cc serve 已关闭，ec_sys 写支持已关闭。");
+    result
+}
+
+fn wait_for_input_close(mut input: impl Read) {
+    let mut buffer = [0u8; 128];
+    loop {
+        match input.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gui_lifetime_arguments_and_input_eof() {
+        assert!(test_args(&["serve", "--exit-on-stdin-close"]).unwrap().exit_on_stdin_close);
+        assert!(!test_args(&["serve"]).unwrap().exit_on_stdin_close);
+        assert!(test_args(&["status", "--exit-on-stdin-close"]).is_err());
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || { wait_for_input_close(reader); tx.send(()).unwrap(); });
+        writer.write_all(b"still alive").unwrap();
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(writer);
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    fn test_args(values: &[&str]) -> Result<Args, String> {
+        parse_argv(values.iter().map(|v| (*v).to_string()).collect())
+    }
+
+    #[test]
+    fn serve_token_arguments() {
+        assert!(test_args(&["serve"]).unwrap().auth_token.is_none());
+        let args = test_args(&["serve", "/tmp/test.sock", "--auth-token", "秘密 token"]).unwrap();
+        assert_eq!(args.auth_token.as_deref(), Some("秘密 token"));
+        assert_eq!(args.positional, ["serve", "/tmp/test.sock"]);
+        assert!(test_args(&["--auth-token", "abc", "serve"]).is_ok());
+        for argv in [
+            vec!["serve", "--auth-token"],
+            vec!["serve", "--auth-token", ""],
+            vec!["serve", "--auth-token", "--json"],
+            vec!["status", "--auth-token", "abc"],
+        ] {
+            assert!(test_args(&argv).is_err());
+        }
+    }
+
+    #[test]
+    fn serve_token_validation() {
+        for input in [r#"{}"#, r#"{"token":null}"#, r#"{"token":123}"#,
+            r#"{"token":true}"#, r#"{"token":[]}"#, r#"{"token":{}}"#,
+            r#"{"token":""}"#, r#"{"token":"abD"}"#, r#"{"token":"abc "}"#] {
+            let req = jparse(input).unwrap();
+            assert!(!serve_authorized(&req, Some("abc")), "{input}");
+            assert!(serve_authorized(&req, None));
+        }
+        for token in ["abc", "秘密 token", "a\"b\\c\nd"] {
+            let req = jparse(&J::o(vec![("token", J::s(token))]).dump()).unwrap();
+            assert!(serve_authorized(&req, Some(token)));
+        }
+    }
+
+    #[test]
+    fn serve_auth_precedes_all_commands_and_checks_every_request() {
+        // /dev/null 代替 EC 文件；测试不访问硬件。
+        let ec = Arc::new(Mutex::new(EcBackend {
+            io: OpenOptions::new().read(true).write(true).open("/dev/null").unwrap(),
+            mode_reg: MODE_REG_DEFAULT,
+        }));
+        let ls = Arc::new(Mutex::new(ListenState {
+            owners: [7].into_iter().collect(), current: Mode::Office, last_bits: 0xA0,
+        }));
+        let args = test_args(&["serve", "--auth-token", "secret"]).unwrap();
+        let help = jparse(r#"{"id":1,"cmd":"help","token":"secret"}"#).unwrap();
+        assert_eq!(serve_handle(&help, &ec, &ls, &args, 7).get("ok"), Some(&J::B(true)));
+        for cmd in ["help", "status", "mode", "gpu", "kb", "ec-read", "listen", "unknown"] {
+            for token in [None, Some("wrong")] {
+                let mut fields = vec![("id", J::s("req")), ("cmd", J::s(cmd)), ("enable", J::B(false))];
+                if let Some(token) = token { fields.push(("token", J::s(token))); }
+                let resp = serve_handle(&J::o(fields), &ec, &ls, &args, 7);
+                assert_eq!(resp.get("id"), Some(&J::s("req")));
+                assert_eq!(resp.get("ok"), Some(&J::B(false)));
+                assert_eq!(resp.get("error").and_then(J::as_str), Some("认证失败：缺少或无效的 token"));
+                assert!(!resp.dump().contains("secret"));
+            }
+        }
+        assert!(ls.lock().unwrap().owners.contains(&7));
+        assert_eq!(serve_handle(&help, &ec, &ls, &args, 7).get("ok"), Some(&J::B(true)));
+        let no_auth = test_args(&["serve"]).unwrap();
+        let help = jparse(r#"{"cmd":"help"}"#).unwrap();
+        assert_eq!(serve_handle(&help, &ec, &ls, &no_auth, 7).get("ok"), Some(&J::B(true)));
+    }
+
+    #[test]
+    fn ec_write_lifecycle() {
+        // 普通临时文件模拟模块参数，不加载模块或访问 EC。
+        let dir = std::env::temp_dir().join(format!("firebat-ec-lifecycle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parameter = dir.join("write_support");
+        for initial in ["N\n", "Y\n"] {
+            std::fs::write(&parameter, initial).unwrap();
+            let guard = EcSysWriteGuard::prepare(&parameter, || panic!("已加载时不应 modprobe")).unwrap();
+            assert_eq!(std::fs::read_to_string(&parameter).unwrap(), "Y\n");
+            drop(guard); // 同时覆盖后续启动失败时的回滚路径
+            assert_eq!(std::fs::read_to_string(&parameter).unwrap(), "N\n");
+        }
+        std::fs::remove_file(&parameter).unwrap();
+        let mut guard = EcSysWriteGuard::prepare(&parameter, || {
+            std::fs::write(&parameter, "Y\n").map_err(|e| e.to_string())
+        }).unwrap();
+        guard.disable().unwrap();
+        assert_eq!(std::fs::read_to_string(&parameter).unwrap(), "N\n");
+        drop(guard);
+        std::fs::remove_file(&parameter).unwrap();
+        assert!(EcSysWriteGuard::prepare(&parameter, || Err("modprobe failed".into())).is_err());
+        assert!(!parameter.exists());
+        std::fs::remove_dir(&dir).unwrap();
+    }
 
     #[test]
     fn json_roundtrip() {
@@ -2248,6 +2580,13 @@ mod tests {
         let dump = v.dump();
         let v2 = jparse(&dump).unwrap();
         assert_eq!(v, v2);
+    }
+
+    #[test]
+    fn json_truncated_unicode_does_not_panic_before_auth() {
+        for suffix in ["", "1", "12", "123"] {
+            assert!(jparse(&format!(r#"{{"token":"\u{suffix}"#)).is_err());
+        }
     }
 
     #[test]

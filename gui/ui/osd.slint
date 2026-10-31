@@ -1,0 +1,22 @@
+// 独立于主窗口，主窗口隐藏到托盘时仍能显示。
+export component ModeOsd inherits Window {
+    in property <string> mode-label: "office";
+    title: "Firebat mode OSD";
+    width: 280px;
+    height: 96px;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    Rectangle {
+        background: #000000b3;
+        border-radius: 12px;
+        Text {
+            text: root.mode-label;
+            color: white;
+            font-size: 38px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
