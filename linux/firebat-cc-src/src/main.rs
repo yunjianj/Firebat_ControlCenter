@@ -84,6 +84,23 @@ const BUSY_WAIT_CYCLES: u32 = 30;
 const BUSY_WAIT_DELAY_MS: u64 = 15;
 const RETRY_TIMES: usize = 3;
 
+// 键盘背光寄存器（Uniwill ITE EC；与 tuxedo-drivers uniwill_interfaces.h 交叉验证一致）
+const KBD_BL_STATUS: u16 = 0x078C; // bit0 = 白色单色键盘；写 0x10 子命令 = 重置
+const KBD_BL_STATUS_WHITE_ONLY: u8 = 0x01;
+const KBD_BL_STATUS_RESET: u8 = 0x10;
+const KBD_BL_RGB_MODE: u16 = 0x0767; // bit5 = APPLY_COLOR 应用颜色；bit7 = RAINBOW 彩虹循环
+const KBD_BL_RGB_MODE_APPLY: u8 = 0x20;
+const KBD_BL_RGB_MODE_RAINBOW: u8 = 0x80;
+const KBD_BL_RGB_RED: u16 = 0x0769; // = 报告附录 A 的 1897/1898/1899
+const KBD_BL_RGB_GREEN: u16 = 0x076A;
+const KBD_BL_RGB_BLUE: u16 = 0x076B;
+const KBD_BL_DEFAULT_RED: u16 = 0x076C; // Windows 端「默认色」R/G/B（报告 1900/1901/1902）
+const KBD_BL_DEFAULT_GREEN: u16 = 0x076D;
+const KBD_BL_DEFAULT_BLUE: u16 = 0x076E;
+const KBD_BL_WHITE_BRI_IMM: u16 = 0x1802; // 白色单色键盘立即生效亮度 0-255（推断）
+const FEATURES_1: u16 = 0x0766; // bit2 = 支持单区 RGB 键盘（tuxedo FEATURES_1_BIT_1_ZONE_RGB_KB）
+const FEATURES_1_BIT_1ZONE_RGB: u8 = 0x04;
+
 // ---------------------------------------------------------------- 模式定义
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -643,7 +660,7 @@ fn parse_args() -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.2.2");
+                println!("firebat-cc 0.3.0");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -670,7 +687,7 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.2.2 — Firebat GX 性能模式/显卡输出控制工具（Linux 逆向移植版）
+        "firebat-cc 0.3.0 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
@@ -681,10 +698,16 @@ fn print_help() {
   firebat-cc gpu dgpu                      切换为独显直连（重启生效）
   firebat-cc gpu raw <0-255>               直接写 MUX 字节（调试用，高危）
   firebat-cc uefi-dump                     十六进制转储 UEFI 厂商变量
+  firebat-cc kb status                     查看键盘背光状态（类型/颜色/灯效）
+  firebat-cc kb color <COLOR>              设置键盘背光颜色
+  firebat-cc kb rainbow <on|off>           彩虹循环灯效开关
+  firebat-cc kb brightness <0-100>         亮度（按当前颜色等比缩放）
+  firebat-cc kb on | off                   开/关背光
+  firebat-cc kb reset                      重置键盘背光为固件默认
 
-MODE 取值:
-  1 | office | 办公        2 | game | balance | 游戏(均衡)
-  3 | turbo | 狂暴         4 | custom | 自定义（v0.1 等同于 1 档，接口保留）
+COLOR 取值: RRGGBB 十六进制（如 ff8000）或名称:
+  red 红  orange 橙  yellow 黄  green 绿  cyan 青  blue 蓝
+  purple 紫  pink 粉  white 白
 
 选项:
   --backend <auto|ec-direct|platform-profile>   性能模式后端选择（默认 auto）
@@ -701,6 +724,8 @@ MODE 取值:
   sudo firebat-cc status
   sudo firebat-cc mode turbo
   sudo firebat-cc gpu dgpu                 # 独显直连，重启生效
+  sudo firebat-cc kb color ff8000          # 键盘背光设为橙色
+  sudo firebat-cc kb brightness 60         # 亮度 60%
   sudo firebat-cc uefi-dump                # 两种输出模式下各转储一次，diff 确认 MUX 偏移与取值
 
 原理简述:
@@ -708,6 +733,9 @@ MODE 取值:
   显卡输出写入 UEFI 厂商变量 UniWillVariable/OemMagicVariable（GUID
   {{9f33f85c-13ca-4fd1-9c4a-96217722c593}}）中的 OemDisplayMode 字段，
   与 Windows 端控制中心同为「读整块-改一字段-写整块」，BIOS 重启时应用。
+  键盘背光: R/G/B 写 EC 0x0769-0x076B，随后置 0x0767 的 APPLY_COLOR 位（0x20）
+  使颜色生效；0x0767 bit7（0x80）为彩虹循环模式；白色单色键盘亮度走 0x1802。
+  键盘寄存器语义与 tuxedo-drivers 内核驱动交叉验证一致。
 
 风险提示: 直接写 EC / UEFI 变量属于底层硬件操作，请在真机上谨慎测试。"
     );
@@ -734,6 +762,7 @@ fn main() {
         "mode" => cmd_mode(&args),
         "ec-read" => cmd_ec_read(&args),
         "gpu" => cmd_gpu(&args),
+        "kb" => cmd_kb(&args),
         "uefi-dump" => cmd_uefi_dump(&args),
         _ => {
             eprintln!("未知命令: {cmd}\n（使用 -h 查看帮助）");
@@ -867,7 +896,7 @@ fn cmd_gpu(args: &Args) {
         std::process::exit(2);
     };
 
-    let mut uefi = match UefiBackend::open(args.mux_offset, args.hybrid_value, args.dgpu_value) {
+    let uefi = match UefiBackend::open(args.mux_offset, args.hybrid_value, args.dgpu_value) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("错误: {e}");
@@ -1011,4 +1040,282 @@ fn cmd_uefi_dump(args: &Args) {
             std::process::exit(1);
         }
     }
+}
+
+// ---------------------------------------------------------------- 键盘背光子命令
+
+fn parse_kb_color(s: &str) -> Option<(u8, u8, u8)> {
+    let lower = s.trim().to_ascii_lowercase();
+    let named = match lower.as_str() {
+        "red" | "红" => Some((0xFF, 0x00, 0x00)),
+        "orange" | "橙" => Some((0xFF, 0x40, 0x00)),
+        "yellow" | "黄" => Some((0xFF, 0xC8, 0x00)),
+        "green" | "绿" => Some((0x00, 0xFF, 0x00)),
+        "cyan" | "青" => Some((0x00, 0xC8, 0xFF)),
+        "blue" | "蓝" => Some((0x00, 0x40, 0xFF)),
+        "purple" | "紫" => Some((0x80, 0x00, 0xFF)),
+        "pink" | "粉" => Some((0xFF, 0x40, 0x80)),
+        "white" | "白" => Some((0xFF, 0xFF, 0xFF)),
+        _ => None,
+    };
+    if let Some(c) = named {
+        return Some(c);
+    }
+    let hex = lower.trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        let v = u32::from_str_radix(hex, 16).ok()?;
+        return Some(((v >> 16) as u8, (v >> 8) as u8, v as u8));
+    }
+    None
+}
+
+fn open_ec_for_kb(args: &Args) -> Result<EcBackend, String> {
+    if args.backend == BackendSel::PlatformProfile {
+        return Err(
+            "kb 命令仅支持 ec-direct 后端（platform-profile 接口不暴露键盘背光寄存器）".into(),
+        );
+    }
+    EcBackend::open(args.mode_reg)
+}
+
+/// 读-改-写 0x0767 模式寄存器（该地址与 USB PoweShare 等共用，必须保留其他位）
+fn kb_mode_rmw(ec: &mut EcBackend, set: u8, clear: u8) -> Result<u8, String> {
+    let cur = ec.uw_read(KBD_BL_RGB_MODE)?;
+    let next = (cur | set) & !clear;
+    ec.uw_write(KBD_BL_RGB_MODE, next)?;
+    Ok(next)
+}
+
+fn cmd_kb(args: &Args) {
+    let Some(sub) = args.positional.get(1).cloned() else {
+        eprintln!("错误: kb 命令需要子命令: status | color | rainbow | brightness | on | off | reset\n（使用 -h 查看帮助）");
+        std::process::exit(2);
+    };
+
+    match sub.as_str() {
+        "status" => {
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            match kb_status(&mut ec) {
+                Ok(()) => {}
+                Err(e) => die(&e),
+            }
+        }
+        "color" => {
+            let Some(cstr) = args.positional.get(2) else {
+                eprintln!("错误: kb color 需要颜色参数（RRGGBB 或名称，如 ff8000 / orange）");
+                std::process::exit(2);
+            };
+            let (r, g, b) = match parse_kb_color(cstr) {
+                Some(c) => c,
+                None => {
+                    eprintln!("错误: 无法解析颜色 \"{cstr}\"（支持 RRGGBB 十六进制或 red/blue/white 等名称）");
+                    std::process::exit(2);
+                }
+            };
+            if args.dry_run {
+                println!("[dry-run] 将写 EC 0x0769/0x076A/0x076B = 0x{r:02X}/0x{g:02X}/0x{b:02X}");
+                println!("[dry-run] 并置 0x0767 的 APPLY_COLOR 位（0x20，读-改-写保留其他位）");
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = (|| -> Result<(), String> {
+                ec.uw_write(KBD_BL_RGB_RED, r)?;
+                ec.uw_write(KBD_BL_RGB_GREEN, g)?;
+                ec.uw_write(KBD_BL_RGB_BLUE, b)?;
+                let mode = kb_mode_rmw(&mut ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+                if mode & KBD_BL_RGB_MODE_RAINBOW != 0 {
+                    println!("注意: 彩虹循环模式（0x0767 bit7）当前开启，静态颜色会被彩虹覆盖；可用 kb rainbow off 关闭。");
+                }
+                // 回读校验
+                let (r2, g2, b2) = (
+                    ec.uw_read(KBD_BL_RGB_RED)?,
+                    ec.uw_read(KBD_BL_RGB_GREEN)?,
+                    ec.uw_read(KBD_BL_RGB_BLUE)?,
+                );
+                if (r2, g2, b2) != (r, g, b) {
+                    return Err(format!(
+                        "回读校验失败: 0x{r2:02X}/0x{g2:02X}/0x{b2:02X} != 0x{r:02X}/0x{g:02X}/0x{b:02X}"
+                    ));
+                }
+                Ok(())
+            })() {
+                die(&e);
+            }
+            println!("已设置键盘背光颜色: #{r:02X}{g:02X}{b:02X}（R=0x{r:02X} G=0x{g:02X} B=0x{b:02X}）");
+        }
+        "rainbow" => {
+            let on = match args.positional.get(2).map(|s| s.as_str()) {
+                Some("on") | Some("1") | Some("开") => true,
+                Some("off") | Some("0") | Some("关") => false,
+                _ => {
+                    eprintln!("错误: kb rainbow 需要 on 或 off 参数");
+                    std::process::exit(2);
+                }
+            };
+            if args.dry_run {
+                println!(
+                    "[dry-run] 将{} 0x0767 的 RAINBOW 位（0x80）并置 APPLY_COLOR（读-改-写保留其他位）",
+                    if on { "置位" } else { "清除" }
+                );
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = kb_mode_rmw(
+                &mut ec,
+                if on { KBD_BL_RGB_MODE_RAINBOW | KBD_BL_RGB_MODE_APPLY } else { KBD_BL_RGB_MODE_APPLY },
+                if on { 0 } else { KBD_BL_RGB_MODE_RAINBOW },
+            ) {
+                die(&e);
+            }
+            println!("彩虹循环灯效已{}", if on { "开启" } else { "关闭" });
+        }
+        "brightness" => {
+            let Some(pstr) = args.positional.get(2) else {
+                eprintln!("错误: kb brightness 需要 0-100 的百分比参数");
+                std::process::exit(2);
+            };
+            let pct: u32 = match pstr.parse() {
+                Ok(v) if v <= 100 => v,
+                _ => {
+                    eprintln!("错误: 无效亮度 \"{pstr}\"（需要 0-100）");
+                    std::process::exit(2);
+                }
+            };
+            if args.dry_run {
+                println!("[dry-run] 将按 {pct}% 等比缩放当前颜色写入 0x0769-0x076B 并置 APPLY_COLOR");
+                println!("[dry-run] 若为白色单色键盘则写 0x1802 立即亮度 = {pct}*255/100");
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = (|| -> Result<(), String> {
+                let white_only = ec.uw_read(KBD_BL_STATUS)? & KBD_BL_STATUS_WHITE_ONLY != 0;
+                if white_only {
+                    let v = (pct * 255 / 100) as u8;
+                    ec.uw_write(KBD_BL_WHITE_BRI_IMM, v)?;
+                    println!("白色单色键盘: 已写 0x1802 立即亮度 = 0x{v:02X}（{pct}%，值域为推断）");
+                    return Ok(());
+                }
+                let (r, g, b) = (
+                    ec.uw_read(KBD_BL_RGB_RED)?,
+                    ec.uw_read(KBD_BL_RGB_GREEN)?,
+                    ec.uw_read(KBD_BL_RGB_BLUE)?,
+                );
+                let scale = |v: u8| ((v as u32) * pct / 100) as u8;
+                let (r2, g2, b2) = (scale(r), scale(g), scale(b));
+                ec.uw_write(KBD_BL_RGB_RED, r2)?;
+                ec.uw_write(KBD_BL_RGB_GREEN, g2)?;
+                ec.uw_write(KBD_BL_RGB_BLUE, b2)?;
+                kb_mode_rmw(&mut ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+                println!("亮度 {pct}%: 颜色 0x{r:02X}/0x{g:02X}/0x{b:02X} → 0x{r2:02X}/0x{g2:02X}/0x{b2:02X}");
+                Ok(())
+            })() {
+                die(&e);
+            }
+        }
+        "on" => {
+            if args.dry_run {
+                println!("[dry-run] 将读取默认色 0x076C-0x076E（全零则用白色）写入 0x0769-0x076B 并置 APPLY_COLOR");
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = (|| -> Result<(), String> {
+                let (r, g, b) = (
+                    ec.uw_read(KBD_BL_DEFAULT_RED)?,
+                    ec.uw_read(KBD_BL_DEFAULT_GREEN)?,
+                    ec.uw_read(KBD_BL_DEFAULT_BLUE)?,
+                );
+                let (r, g, b) = if (r, g, b) == (0, 0, 0) { (0xFF, 0xFF, 0xFF) } else { (r, g, b) };
+                ec.uw_write(KBD_BL_RGB_RED, r)?;
+                ec.uw_write(KBD_BL_RGB_GREEN, g)?;
+                ec.uw_write(KBD_BL_RGB_BLUE, b)?;
+                kb_mode_rmw(&mut ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+                println!("背光已开启: #{r:02X}{g:02X}{b:02X}（来源: EC 默认色寄存器 0x076C-0x076E）");
+                Ok(())
+            })() {
+                die(&e);
+            }
+        }
+        "off" => {
+            if args.dry_run {
+                println!("[dry-run] 将 0x0769-0x076B 写 0x00/0x00/0x00 并置 APPLY_COLOR");
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = (|| -> Result<(), String> {
+                let prev = (
+                    ec.uw_read(KBD_BL_RGB_RED)?,
+                    ec.uw_read(KBD_BL_RGB_GREEN)?,
+                    ec.uw_read(KBD_BL_RGB_BLUE)?,
+                );
+                ec.uw_write(KBD_BL_RGB_RED, 0)?;
+                ec.uw_write(KBD_BL_RGB_GREEN, 0)?;
+                ec.uw_write(KBD_BL_RGB_BLUE, 0)?;
+                kb_mode_rmw(&mut ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+                println!(
+                    "背光已关闭（原颜色 #{:02X}{:02X}{:02X}，可用 kb color 恢复）",
+                    prev.0, prev.1, prev.2
+                );
+                Ok(())
+            })() {
+                die(&e);
+            }
+        }
+        "reset" => {
+            if args.dry_run {
+                println!("[dry-run] 将向 0x078C 写子命令 0x10（重置键盘背光为固件默认）");
+                return;
+            }
+            let mut ec = open_ec_for_kb(args).unwrap_or_else(|e| die(&e));
+            if let Err(e) = ec.uw_write(KBD_BL_STATUS, KBD_BL_STATUS_RESET) {
+                die(&e);
+            }
+            println!("已发送重置子命令（0x078C = 0x10）。");
+        }
+        other => {
+            eprintln!("未知 kb 子命令: {other}（可选: status | color | rainbow | brightness | on | off | reset）");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn kb_status(ec: &mut EcBackend) -> Result<(), String> {
+    let status = ec.uw_read(KBD_BL_STATUS)?;
+    let feat1 = ec.uw_read(FEATURES_1)?;
+    let mode = ec.uw_read(KBD_BL_RGB_MODE)?;
+    let (r, g, b) = (
+        ec.uw_read(KBD_BL_RGB_RED)?,
+        ec.uw_read(KBD_BL_RGB_GREEN)?,
+        ec.uw_read(KBD_BL_RGB_BLUE)?,
+    );
+    let (dr, dg, db) = (
+        ec.uw_read(KBD_BL_DEFAULT_RED)?,
+        ec.uw_read(KBD_BL_DEFAULT_GREEN)?,
+        ec.uw_read(KBD_BL_DEFAULT_BLUE)?,
+    );
+
+    println!("键盘背光状态（ec-direct，Uniwill ITE EC）:");
+    if status & KBD_BL_STATUS_WHITE_ONLY != 0 {
+        println!("  键盘类型:   白色单色（0x078C bit0 置位），亮度寄存器 0x1802");
+    } else if feat1 & FEATURES_1_BIT_1ZONE_RGB != 0 {
+        println!("  键盘类型:   RGB（0x0766 bit2 置位，单区/1-zone RGB）");
+    } else {
+        println!("  键盘类型:   未知（0x078C=0x{status:02X} 0x0766=0x{feat1:02X}，两个特性位均未置位）");
+    }
+    println!(
+        "  彩虹循环:   {}（0x0767=0x{mode:02X}，bit7 RAINBOW）",
+        if mode & KBD_BL_RGB_MODE_RAINBOW != 0 { "开" } else { "关" }
+    );
+    println!(
+        "  APPLY_COLOR: {}（bit5）",
+        if mode & KBD_BL_RGB_MODE_APPLY != 0 { "已置位" } else { "未置位" }
+    );
+    println!("  当前颜色:   #{r:02X}{g:02X}{b:02X}（R=0x{r:02X} G=0x{g:02X} B=0x{b:02X} @0x0769-0x076B）");
+    println!("  固件默认色: #{dr:02X}{dg:02X}{db:02X}（@0x076C-0x076E）");
+    println!("  提示: 颜色值即各通道亮度；彩虹开启时静态颜色被覆盖。");
+    Ok(())
+}
+
+fn die(e: &str) -> ! {
+    eprintln!("错误: {e}");
+    std::process::exit(1);
 }
