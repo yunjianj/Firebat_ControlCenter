@@ -1,0 +1,12 @@
+[package]
+name = "firebat-cc"
+version = "0.2.2"
+edition = "2021"
+description = "Firebat GX 性能模式控制工具 (Linux, 逆向 ControlCenter 5.49.51.44)"
+license = "GPL-2.0+"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
