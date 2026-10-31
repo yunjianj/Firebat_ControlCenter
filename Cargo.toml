@@ -1,0 +1,21 @@
+[workspace]
+# 根包即 CLI（firebat-cc），gui/ 为图形前端成员包。
+# 整个仓库共用一份 Cargo.lock 与 target/ 目录。
+members = ["gui"]
+default-members = [".", "gui"]
+resolver = "2"
+
+[package]
+name = "firebat-cc"
+version = "0.6.0"
+edition = "2021"
+description = "Firebat GX 性能模式控制工具 (Linux, 逆向 ControlCenter 5.49.51.44)"
+license = "GPL-2.0+"
+
+# 工作区统一发布配置（CLI 与 GUI 共用）。
+# panic = "abort"：CLI 追求最小体积；GUI 无 unwind 依赖，同样适用。
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

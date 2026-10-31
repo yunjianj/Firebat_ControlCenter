@@ -4,7 +4,7 @@ Firebat GX 控制中心的 Linux 图形前端，使用 [Slint](https://slint.dev
 界面完全用手绘组件实现，不依赖任何系统控件库；X11 与 Wayland 均可运行。
 
 前端**不直接访问硬件**，而是通过 Unix domain socket 与
-[`firebat-cc serve`](../serve-协议.md) 守护进程通信，因此 GUI 进程不需要 root 权限。
+[`firebat-cc serve`](../docs/serve-协议.md) 守护进程通信，因此 GUI 进程不需要 root 权限。
 
 ## 功能
 
@@ -46,9 +46,12 @@ sudo pacman -S --needed base-devel pkgconf libxkbcommon wayland fontconfig freet
 # Debian/Ubuntu
 sudo apt install build-essential pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev
 
-cd linux/firebat-cc-gui
+# 在仓库根目录构建整个工作区（CLI + GUI）
 cargo build --release
 # 产物：target/release/firebat-cc-gui（单文件，可复制到任意位置）
+
+# 只构建 GUI
+cargo build --release -p firebat-cc-gui
 ```
 
 ## 运行
@@ -57,10 +60,10 @@ cargo build --release
 
 ```bash
 sudo modprobe ec_sys write_support=1
-sudo ../firebat-cc serve            # 默认 /run/firebat-cc.sock
+sudo ./target/release/firebat-cc serve          # 默认 /run/firebat-cc.sock
 ```
 
-再以普通用户启动界面：
+再以普通用户启动界面（以下命令均在仓库根目录执行）：
 
 ```bash
 ./target/release/firebat-cc-gui
@@ -79,11 +82,11 @@ FIREBAT_CC_SOCK=/tmp/fb.sock ./target/release/firebat-cc-gui
 
 ## 无真机联调
 
-`tools/mock-daemon.py` 是一份纯内存实现的模拟守护进程，支持协议中的全部命令，
+`gui/tools/mock-daemon.py` 是一份纯内存实现的模拟守护进程，支持协议中的全部命令，
 用于在没有 Firebat 硬件（或不想写 EC）的机器上调试界面：
 
 ```bash
-python3 tools/mock-daemon.py /tmp/fb-mock.sock &
+python3 gui/tools/mock-daemon.py /tmp/fb-mock.sock &
 ./target/release/firebat-cc-gui --socket /tmp/fb-mock.sock
 ```
 
@@ -94,7 +97,7 @@ python3 tools/mock-daemon.py /tmp/fb-mock.sock &
 无显示器环境（CI、SSH）也能把五个页面渲染成图片：
 
 ```bash
-cargo run --release --example screenshot -- /tmp/firebat
+cargo run --release -p firebat-cc-gui --example screenshot -- /tmp/firebat
 # 输出 /tmp/firebat-0..4.ppm、-light.ppm、-confirm.ppm（P6 格式，可用 ffmpeg 转 PNG）
 ffmpeg -i /tmp/firebat-0.ppm /tmp/firebat-0.png
 ```
@@ -109,7 +112,7 @@ ffmpeg -i /tmp/firebat-0.ppm /tmp/firebat-0.png
 ## 目录结构
 
 ```
-firebat-cc-gui/
+gui/                            # Cargo 成员包 firebat-cc-gui（构建产物在仓库根 target/）
 ├── build.rs                    # slint-build：编译 ui/*.slint
 ├── ui/
 │   ├── app.slint               # 主窗口：侧栏、顶栏、页面容器、确认框、轻提示
@@ -150,7 +153,7 @@ firebat-cc serve 操作 EC/UEFI → 响应 → invoke_from_event_loop →
   `[Colors:Window] BackgroundNormal` 的亮度。都探测不到时按深色显示。
   排查用 `./target/release/firebat-cc-gui --print-theme`，会打印配置路径、探测结果与最终解析。
 - 界面左上角与窗口图标使用官方 Logo：`ui/assets/logo.png` 取自
-  `Windows/TF_ControlCenter_5.49.51.44GX_Firebat/logo/gamingcenter_Firebat.ico` 内嵌的
+  `reference/windows/TF_ControlCenter_5.49.51.44GX_Firebat/logo/gamingcenter_Firebat.ico` 内嵌的
   256×256 PNG（同目录的 `logo.png` 只有 48×48，放大后发虚）。更换 Logo 时直接替换该文件
   重新编译即可（`@image-url` 在编译期嵌入，不依赖运行时路径）。
 - 显卡输出的 0/1 与混合/独显对应关系来自逆向推断，若与本机不符，用 CLI 的

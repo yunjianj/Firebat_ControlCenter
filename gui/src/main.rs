@@ -1,7 +1,7 @@
 //! Firebat GX 控制中心 —— Slint 图形前端
 //!
 //! 前端不直接碰硬件：它通过 Unix domain socket 与 `firebat-cc serve` 守护进程
-//! 通信（协议见 `linux/serve-协议.md`），因此 GUI 进程**不需要 root**。
+//! 通信（协议见 `docs/serve-协议.md`），因此 GUI 进程**不需要 root**。
 //!
 //! 用法：
 //!   sudo modprobe ec_sys write_support=1

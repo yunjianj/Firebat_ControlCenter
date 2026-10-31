@@ -1,6 +1,8 @@
 # AGENTS.md — 逆向项目工作规则
 
-本项目是对 Firebat（火影）GX 控制中心（Windows UWP 套件）的逆向 + Linux 移植工程。
+本项目是对 Firebat（火影）GX 控制中心（Windows UWP 套件）的逆向 + Linux 移植工程，
+现已按**纯 Linux 项目**组织：可构建可运行的代码全部在仓库主目录（Cargo 工作区），
+Windows 安装包与解包产物仅作为逆向素材隔离存放在 `reference/windows/`。
 所有 AI 助手与协作者必须遵守以下规则。
 
 ## 1. 逆向成果必须回写分析报告（核心规则）
@@ -46,15 +48,28 @@
 
 ## 5. 代码约定
 
-- Linux 工具位于 `linux/firebat-cc-src/`（Rust，零第三方依赖），单文件二进制输出到
-  `linux/firebat-cc`。
+- 本项目为纯 Linux 项目，Cargo 工作区位于仓库根目录：根包 `firebat-cc`（CLI，Rust，
+  零第三方依赖）源码在 `src/`，图形前端 `firebat-cc-gui`（Slint）在 `gui/`。
+- 构建产物统一输出到根 `target/release/`（`firebat-cc`、`firebat-cc-gui`），
+  不再维护 `linux/` 之类的平台目录层级。
 - 新功能的默认值如属推断，必须提供命令行覆盖参数（如 `--mux-offset`、
   `--hybrid-value`），并在帮助文本中说明。
-- 版本号更新时同步修改 `Cargo.toml` 与 `src/main.rs` 中硬编码的版本字符串。
+- 版本号更新时同步修改 `Cargo.toml` 与 `src/main.rs` 中硬编码的版本字符串；
+  GUI 版本号在 `gui/Cargo.toml` 与 `gui/ui/app.slint`。
 
 ## 6. 工作目录
 
-- `分析报告.md` —— 逆向总报告（唯一事实来源）
-- `Windows/` —— 安装包与解包产物（`Windows/extracted/` 为从安装器解出的文件）
-- `linux/` —— Linux 工具源码与二进制
-- `Windows/TF_.../PreinstallKit/*.msixbundle` —— UWP 包（内含托盘程序与语言资源）
+```
+├── Cargo.toml            # 工作区 + CLI 包定义（统一 [profile.release]）
+├── Cargo.lock            # 工作区单一锁文件
+├── src/main.rs           # firebat-cc CLI 源码
+├── gui/                  # firebat-cc-gui 图形前端（Slint 成员包）
+├── docs/                 # serve 协议、专项调查记录
+├── reference/windows/    # Windows 端安装包与解包/反编译产物（逆向素材，不参与构建）
+├── 分析报告.md           # 逆向总报告（唯一事实来源）
+└── AGENTS.md
+```
+
+- `reference/windows/` —— 原安装包、`extracted/` 解包产物、UWP 包（含托盘程序与语言
+  资源）。仅作逆向取证使用，**不得被 Linux 侧代码或构建引用**。
+

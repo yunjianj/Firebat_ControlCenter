@@ -6,8 +6,8 @@ v0.6.0 · 零依赖 JSON 行协议，适用于 Tauri / GTK / Electron / Python �
 
 ```bash
 sudo modprobe ec_sys write_support=1          # 每次开机一次
-sudo ./firebat-cc serve                       # 默认 /run/firebat-cc.sock
-sudo ./firebat-cc serve /tmp/fb.sock          # 自定义路径
+sudo ./target/release/firebat-cc serve        # 默认 /run/firebat-cc.sock
+sudo ./target/release/firebat-cc serve /tmp/fb.sock   # 自定义路径
 ```
 
 守护进程以 root 运行（持有 EC 权限），socket 权限 0666，**前端进程无需 root**。
@@ -72,25 +72,25 @@ socat - UNIX-CONNECT:/run/firebat-cc.sock
 所有命令支持 `--json`，输出 `{"ok":true,"data":...}` / `{"ok":false,"error":...}`：
 
 ```bash
-sudo ./firebat-cc status --json
-sudo ./firebat-cc mode turbo --json
-sudo ./firebat-cc kb status --json
+sudo ./target/release/firebat-cc status --json
+sudo ./target/release/firebat-cc mode turbo --json
+sudo ./target/release/firebat-cc kb status --json
 ```
 
 `--dry-run` 与 `--json` 可叠加（返回 `dry_run: true`，不写硬件）。
 
 ## 官方前端
 
-`firebat-cc-gui/` 是基于本协议的 Slint 图形界面（Rust，无需 root）：
+`gui/`（Cargo 成员包 `firebat-cc-gui`）是基于本协议的 Slint 图形界面（Rust，无需 root）：
 
 ```bash
-sudo ./firebat-cc serve &
-./firebat-cc-gui/target/release/firebat-cc-gui           # 默认 /run/firebat-cc.sock
-./firebat-cc-gui/target/release/firebat-cc-gui --socket /tmp/fb.sock
+sudo ./target/release/firebat-cc serve &
+./target/release/firebat-cc-gui                         # 默认 /run/firebat-cc.sock
+./target/release/firebat-cc-gui --socket /tmp/fb.sock
 ```
 
-前端只做「协议 ↔ 界面状态」的映射，协议改动后同步修改 `ui/state.slint` 与
-`src/main.rs` 即可。没有真机时可用 `firebat-cc-gui/tools/mock-daemon.py` 联调
+前端只做「协议 ↔ 界面状态」的映射，协议改动后同步修改 `gui/ui/state.slint` 与
+`gui/src/main.rs` 即可。没有真机时可用 `gui/tools/mock-daemon.py` 联调
 （纯内存模拟，支持上面全部命令）。
 
 ## 注意

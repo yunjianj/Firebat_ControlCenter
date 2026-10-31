@@ -26,7 +26,4 @@ slint-build = "1.18"
 [dev-dependencies]
 rgb = "0.8"
 
-[profile.release]
-opt-level = "s"
-lto = true
-strip = true
+# 发布配置由工作区根 Cargo.toml 统一提供（见根目录 [profile.release]）
