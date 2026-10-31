@@ -3,6 +3,19 @@
 对火影（Firebat）GX 随机附带的 Windows UWP「控制中心」做逆向，并在 Linux 上重建
 等效能力：性能模式切换、显卡输出（MUX）切换、键盘背光与 EC 调试。
 
+**本软件通过逆向分析 Windows 版控制中心获取相关接口，并通过 AI 进行开发。**
+这是社区 Linux 移植项目，非厂商官方软件。
+
+## 适配机型与实测范围
+
+**目前仅在火影 Huan 16 Pro 上进行过真机实测，当前适配目标为该机型。**
+接口依据随机器提供的 Firebat GX Windows 控制中心（5.49.51.44）逆向分析实现。
+其他火影机型、其他品牌的同模具机型，以及不同 BIOS / EC 固件版本，尚未验证兼容性；
+安装包中包含其他机型配置不代表本软件已经适配这些机型。
+
+已实测过该机型不代表全部功能或后续改动均已在真机验证。各接口与功能的具体验证
+状态以 [`分析报告.md`](分析报告.md) 的逐项记录为准，静态推断项仍需只读检查和差分验证。
+
 本项目按**纯 Linux 项目**组织——可构建、可运行的代码全部位于仓库主目录（Cargo
 工作区），Windows 侧安装包与解包产物仅作为逆向素材隔离存放在 `reference/windows/`。
 
@@ -50,14 +63,32 @@ cargo build --release -p firebat-cc-gui   # 仅 GUI
 ## 运行
 
 ```bash
-sudo modprobe ec_sys write_support=1        # 每次开机一次，EC 直写需要
-sudo ./target/release/firebat-cc serve      # 守护进程，默认 /run/firebat-cc.sock
-./target/release/firebat-cc-gui             # 图形界面（普通用户）
+./target/release/firebat-cc-gui             # 后端未运行时自动启动同目录 firebat-cc serve
 ```
+
+GUI 先连接已有后端；未运行时通过 `pkexec` 请求系统授权并自动启动同目录后端，
+需要安装 polkit 并运行桌面认证代理。GUI 保持普通用户权限；自定义 `--socket` /
+`FIREBAT_CC_SOCK` 同样传给自动启动的后端。关闭窗口会进入托盘并保留模式键监听；
+左键托盘恢复窗口，右键菜单可「打开」或「关闭」。GUI 自动启动的后端使用随机凭证；
+从菜单关闭 GUI 后，会同步关闭该后端并清理 EC 写支持。手动启动的已有后端保持独立。
+桌面不支持托盘时，关闭窗口直接退出 GUI。
+挡位切换时会在左上角显示半透明黑底白字提示，5 秒后消失；托盘运行时同样生效。
+也可手动启动：`sudo ./target/release/firebat-cc serve`。
+可附加 `--auth-token '随机长凭证'`，此后每条 socket JSON 请求必须带相同的
+`"token"` 字段；不带参数保持兼容。GUI 连接手动启用认证的服务时可使用
+`--auth-token TOKEN` 或 `FIREBAT_CC_TOKEN` 环境变量，详见[访问验证说明](docs/serve-协议.md#可选访问凭证)。
+
+`serve` 启动失败或收到 Ctrl+C / SIGTERM / SIGHUP 时关闭 `ec_sys` 写支持并回读
+校验（即使启动前已开启），保留模块。仅允许一个服务实例，包括使用不同 socket 路径
+的实例。SIGKILL、进程崩溃和断电无法执行清理；必要时手动关闭：
+`sudo sh -c 'echo N > /sys/module/ec_sys/parameters/write_support'`。
+若提示 debugfs 未挂载，先执行 `sudo mount -t debugfs debugfs /sys/kernel/debug`。
 
 也可以不走守护进程，直接单次调用：
 
 ```bash
+sudo modprobe ec_sys write_support=1        # 单次命令仍需手动准备；已加载时用下行开启
+sudo sh -c 'echo Y > /sys/module/ec_sys/parameters/write_support'
 sudo ./target/release/firebat-cc status
 sudo ./target/release/firebat-cc mode turbo
 sudo ./target/release/firebat-cc kb status
