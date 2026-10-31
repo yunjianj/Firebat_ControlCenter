@@ -603,10 +603,12 @@ fn open_tool(sel: BackendSel, mode_reg: u16) -> Result<Tool, String> {
 
 // ---------------------------------------------------------------- CLI
 
+#[derive(Clone)]
 struct Args {
     backend: BackendSel,
     mode_reg: u16,
     dry_run: bool,
+    json: bool,
     interval: u64,
     mux_offset: u16,
     hybrid_value: u8,
@@ -618,6 +620,7 @@ fn parse_args() -> Result<Args, String> {
     let mut backend = BackendSel::Auto;
     let mut mode_reg = MODE_REG_DEFAULT;
     let mut dry_run = false;
+    let mut json = false;
     let mut interval: u64 = 300;
     let mut mux_offset = MUX_OFFSET_DEFAULT;
     let mut hybrid_value = MUX_HYBRID_DEFAULT;
@@ -664,6 +667,7 @@ fn parse_args() -> Result<Args, String> {
                 dgpu_value = parse_hex_u16(v).map_err(|_| format!("无效值: {v}"))? as u8;
             }
             "--dry-run" => dry_run = true,
+            "--json" => json = true,
             "--interval" => {
                 i += 1;
                 let v = argv.get(i).ok_or("--interval 缺少参数")?;
@@ -677,7 +681,7 @@ fn parse_args() -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.4.0");
+                println!("firebat-cc 0.6.0");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -689,6 +693,7 @@ fn parse_args() -> Result<Args, String> {
         backend,
         mode_reg,
         dry_run,
+        json,
         interval,
         mux_offset,
         hybrid_value,
@@ -705,12 +710,13 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.4.0 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
+        "firebat-cc 0.6.0 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
   firebat-cc mode <MODE>                   切换性能模式
   firebat-cc listen                        监听模式：检测性能模式键并按序切换
+  firebat-cc serve [SOCKET]                守护模式：Unix socket JSON 接口（前端用）
   firebat-cc ec-read <ADDR> [COUNT]        读取 EC 寄存器（调试用，16 进制地址）
   firebat-cc gpu status                    查看显卡输出模式（MUX）
   firebat-cc gpu hybrid                    切换为混合输出（重启生效）
@@ -735,6 +741,7 @@ COLOR 取值: RRGGBB 十六进制（如 ff8000）或名称:
   --hybrid-value <n>                            混合输出对应值覆盖（默认 0）
   --dgpu-value <n>                              独显直连对应值覆盖（默认 1）
   --dry-run                                     只显示将要执行的操作，不实际写入
+  --json                                        以 JSON 输出结果（前端/脚本集成用）
   --interval <ms>                               listen 轮询间隔（默认 300，50-5000）
   -h, --help                                    显示帮助
   -v, --version                                 显示版本
@@ -781,6 +788,7 @@ fn main() {
         "status" => cmd_status(&args),
         "mode" => cmd_mode(&args),
         "listen" => cmd_listen(&args),
+        "serve" => cmd_serve(&args),
         "ec-read" => cmd_ec_read(&args),
         "gpu" => cmd_gpu(&args),
         "kb" => cmd_kb(&args),
@@ -793,6 +801,28 @@ fn main() {
 }
 
 fn cmd_status(args: &Args) {
+    if args.json {
+        let out = match open_tool(args.backend, args.mode_reg) {
+            Ok(mut tool) => match tool.read_state() {
+                Ok((mode, detail)) => J::o(vec![
+                    ("ok", J::B(true)),
+                    (
+                        "data",
+                        J::o(vec![
+                            ("mode", mode.map(|m| J::n(m.index() as f64)).unwrap_or(J::Null)),
+                            ("name", J::s(mode.map(|m| m.zh()).unwrap_or("未知"))),
+                            ("backend", J::s(tool.name())),
+                            ("detail", J::s(&detail)),
+                        ]),
+                    ),
+                ]),
+                Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+            },
+            Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+        };
+        println!("{}", out.dump());
+        return;
+    }
     match open_tool(args.backend, args.mode_reg) {
         Ok(mut tool) => match tool.read_state() {
             Ok((mode, detail)) => {
@@ -831,6 +861,31 @@ fn cmd_mode(args: &Args) {
             std::process::exit(2);
         }
     };
+
+    if args.json {
+        if args.dry_run {
+            let out = J::o(vec![
+                ("ok", J::B(true)),
+                ("data", J::o(vec![("dry_run", J::B(true)), ("mode", J::n(target.index() as f64)), ("name", J::s(target.zh()))])),
+            ]);
+            println!("{}", out.dump());
+            return;
+        }
+        let out = match open_tool(args.backend, args.mode_reg) {
+            Ok(mut tool) => {
+                tool.write_mode(target).map(|_| {
+                    J::o(vec![("mode", J::n(target.index() as f64)), ("name", J::s(target.zh()))])
+                })
+            }
+            Err(e) => Err(e),
+        };
+        let out = match out {
+            Ok(d) => J::o(vec![("ok", J::B(true)), ("data", d)]),
+            Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+        };
+        println!("{}", out.dump());
+        return;
+    }
 
     if args.dry_run {
         println!(
@@ -876,6 +931,18 @@ fn cmd_ec_read(args: &Args) {
         eprintln!("错误: ec-read 需要地址参数，例如: firebat-cc ec-read 0x751");
         std::process::exit(2);
     };
+    if args.json {
+        let count = args.positional.get(2).and_then(|s| s.parse().ok()).unwrap_or(1u16);
+        let out = match EcBackend::open(args.mode_reg) {
+            Ok(mut ec) => match api_ec_read(&mut ec, addr_str, count) {
+                Ok(d) => J::o(vec![("ok", J::B(true)), ("data", d)]),
+                Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+            },
+            Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+        };
+        println!("{}", out.dump());
+        return;
+    }
     let addr = match parse_hex_u16(addr_str) {
         Ok(a) => a,
         Err(_) => {
@@ -916,6 +983,15 @@ fn cmd_gpu(args: &Args) {
         eprintln!("错误: gpu 命令需要子命令: status | hybrid | dgpu | raw <n>\n（使用 -h 查看帮助）");
         std::process::exit(2);
     };
+
+    if args.json && sub != "raw" {
+        let out = match api_gpu(args, &sub, args.dry_run) {
+            Ok(d) => J::o(vec![("ok", J::B(true)), ("data", d)]),
+            Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+        };
+        println!("{}", out.dump());
+        return;
+    }
 
     let uefi = match UefiBackend::open(args.mux_offset, args.hybrid_value, args.dgpu_value) {
         Ok(b) => b,
@@ -1112,6 +1188,18 @@ fn cmd_kb(args: &Args) {
         eprintln!("错误: kb 命令需要子命令: status | color | rainbow | brightness | on | off | reset\n（使用 -h 查看帮助）");
         std::process::exit(2);
     };
+
+    if args.json {
+        let out = match open_ec_for_kb(args) {
+            Ok(mut ec) => match api_kb(&mut ec, &sub, args.positional.get(2).map(|s| s.as_str()), args.dry_run) {
+                Ok(d) => J::o(vec![("ok", J::B(true)), ("data", d)]),
+                Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+            },
+            Err(e) => J::o(vec![("ok", J::B(false)), ("error", J::s(&e))]),
+        };
+        println!("{}", out.dump());
+        return;
+    }
 
     match sub.as_str() {
         "status" => {
@@ -1482,5 +1570,690 @@ fn cmd_listen(args: &Args) {
         }
         // 以写入后的实际寄存器值为新基线（我们的写入不算外部变化）
         last_bits = ec.uw_read(args.mode_reg).unwrap_or(bits);
+    }
+}
+
+// ---------------------------------------------------------------- 最小 JSON（零依赖）
+
+#[derive(Clone, Debug, PartialEq)]
+enum J {
+    Null,
+    B(bool),
+    N(f64),
+    S(String),
+    A(Vec<J>),
+    O(Vec<(String, J)>),
+}
+
+impl J {
+    fn s(v: &str) -> J {
+        J::S(v.to_string())
+    }
+    fn n(v: impl Into<f64>) -> J {
+        J::N(v.into())
+    }
+    fn o(pairs: Vec<(&str, J)>) -> J {
+        J::O(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+    fn get(&self, k: &str) -> Option<&J> {
+        if let J::O(m) = self {
+            m.iter().find(|(key, _)| key == k).map(|(_, v)| v)
+        } else {
+            None
+        }
+    }
+    fn as_str(&self) -> Option<&str> {
+        if let J::S(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+    fn as_bool(&self) -> Option<bool> {
+        if let J::B(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    fn dump(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+    fn write(&self, out: &mut String) {
+        match self {
+            J::Null => out.push_str("null"),
+            J::B(b) => out.push_str(if *b { "true" } else { "false" }),
+            J::N(v) => {
+                if v.fract() == 0.0 && v.abs() < 9e15 {
+                    out.push_str(&format!("{}", *v as i64));
+                } else {
+                    out.push_str(&format!("{v}"));
+                }
+            }
+            J::S(s) => {
+                out.push('"');
+                for c in s.chars() {
+                    match c {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+            }
+            J::A(items) => {
+                out.push('[');
+                for (i, it) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    it.write(out);
+                }
+                out.push(']');
+            }
+            J::O(pairs) => {
+                out.push('{');
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    J::s(k).write(out);
+                    out.push(':');
+                    v.write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn jparse(s: &str) -> Result<J, String> {
+    let b: Vec<char> = s.chars().collect();
+    let (v, _) = jp_value(&b, 0)?;
+    Ok(v)
+}
+
+fn jp_ws(b: &[char], mut i: usize) -> usize {
+    while i < b.len() && b[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+fn jp_value(b: &[char], i: usize) -> Result<(J, usize), String> {
+    let i = jp_ws(b, i);
+    if i >= b.len() {
+        return Err("JSON 意外结束".into());
+    }
+    match b[i] {
+        '{' => {
+            let mut obj: Vec<(String, J)> = Vec::new();
+            let mut i = jp_ws(b, i + 1);
+            if i < b.len() && b[i] == '}' {
+                return Ok((J::O(obj), i + 1));
+            }
+            loop {
+                i = jp_ws(b, i);
+                let (k, ni) = jp_value(b, i)?;
+                let key = k.as_str().ok_or("对象键必须是字符串")?.to_string();
+                i = jp_ws(b, ni);
+                if i >= b.len() || b[i] != ':' {
+                    return Err("JSON 对象缺少 :".into());
+                }
+                let (v, ni) = jp_value(b, i + 1)?;
+                obj.push((key, v));
+                i = jp_ws(b, ni);
+                if i >= b.len() {
+                    return Err("JSON 对象未闭合".into());
+                }
+                match b[i] {
+                    ',' => i += 1,
+                    '}' => return Ok((J::O(obj), i + 1)),
+                    _ => return Err("JSON 对象缺少 }".into()),
+                }
+            }
+        }
+        '[' => {
+            let mut arr = Vec::new();
+            let mut i = jp_ws(b, i + 1);
+            if i < b.len() && b[i] == ']' {
+                return Ok((J::A(arr), i + 1));
+            }
+            loop {
+                let (v, ni) = jp_value(b, i)?;
+                arr.push(v);
+                i = jp_ws(b, ni);
+                if i >= b.len() {
+                    return Err("JSON 数组未闭合".into());
+                }
+                match b[i] {
+                    ',' => i += 1,
+                    ']' => return Ok((J::A(arr), i + 1)),
+                    _ => return Err("JSON 数组缺少 ]".into()),
+                }
+            }
+        }
+        '"' => {
+            let mut s = String::new();
+            let mut i = i + 1;
+            while i < b.len() {
+                match b[i] {
+                    '"' => return Ok((J::S(s), i + 1)),
+                    '\\' => {
+                        i += 1;
+                        if i >= b.len() {
+                            return Err("JSON 字符串转义未闭合".into());
+                        }
+                        match b[i] {
+                            'n' => s.push('\n'),
+                            't' => s.push('\t'),
+                            'r' => s.push('\r'),
+                            'u' => {
+                                let hex: String = b[i + 1..i + 5].iter().collect();
+                                let cp = u32::from_str_radix(&hex, 16)
+                                    .map_err(|_| "JSON \\u 转义无效".to_string())?;
+                                if let Some(c) = char::from_u32(cp) {
+                                    s.push(c);
+                                }
+                                i += 4;
+                            }
+                            c => s.push(c),
+                        }
+                        i += 1;
+                    }
+                    c => {
+                        s.push(c);
+                        i += 1;
+                    }
+                }
+            }
+            Err("JSON 字符串未闭合".into())
+        }
+        't' if b[i..].starts_with(&['t', 'r', 'u', 'e']) => Ok((J::B(true), i + 4)),
+        'f' if b[i..].starts_with(&['f', 'a', 'l', 's', 'e']) => Ok((J::B(false), i + 5)),
+        'n' if b[i..].starts_with(&['n', 'u', 'l', 'l']) => Ok((J::Null, i + 4)),
+        _ => {
+            let start = i;
+            let mut i = i;
+            while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], '-' | '+' | '.' | 'e' | 'E')) {
+                i += 1;
+            }
+            let txt: String = b[start..i].iter().collect();
+            txt.parse::<f64>().map(J::N).map(|v| (v, i)).map_err(|_| format!("JSON 数字无效: {txt}"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------- API 层（--json 与 serve 共用）
+
+fn api_status_ec(ec: &mut EcBackend) -> Result<J, String> {
+    let (mode, detail) = ec.read_state()?;
+    let cur = mode.unwrap_or(Mode::Office);
+    Ok(J::o(vec![
+        ("mode", mode.map(|m| J::n(m.index() as f64)).unwrap_or(J::Null)),
+        ("name", J::s(cur.zh())),
+        ("bits", J::s(&format!("{:02X}", ec.uw_read(MODE_REG_DEFAULT).unwrap_or(0)))),
+        ("backend", J::s("ec-direct")),
+        ("detail", J::s(&detail)),
+    ]))
+}
+
+fn api_mode_set_ec(ec: &mut EcBackend, value: &str) -> Result<J, String> {
+    let target = Mode::parse(value).ok_or_else(|| format!("未知模式: {value}"))?;
+    ec.write_mode(target)?;
+    Ok(J::o(vec![
+        ("mode", J::n(target.index() as f64)),
+        ("name", J::s(target.zh())),
+        ("bits", J::s(&format!("{:02X}", target.ec_bits()))),
+    ]))
+}
+
+fn api_gpu(args: &Args, action: &str, dry_run: bool) -> Result<J, String> {
+    let uefi = UefiBackend::open(args.mux_offset, args.hybrid_value, args.dgpu_value)?;
+    match action {
+        "status" => {
+            let (_, payload) = uefi.read()?;
+            let mux = uefi.read_mux()?;
+            let interp = if mux == args.hybrid_value {
+                "hybrid"
+            } else if mux == args.dgpu_value {
+                "dgpu"
+            } else {
+                "unknown"
+            };
+            Ok(J::o(vec![
+                ("var", J::s(uefi.var_name)),
+                ("mux_raw", J::n(mux as f64)),
+                ("interpreted", J::s(interp)),
+                ("payload_len", J::n(payload.len() as f64)),
+            ]))
+        }
+        "hybrid" | "dgpu" => {
+            let target = if action == "hybrid" { args.hybrid_value } else { args.dgpu_value };
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("would_write", J::n(target as f64))]));
+            }
+            let cur = uefi.read_mux()?;
+            if cur != target {
+                uefi.write_mux(target)?;
+            }
+            Ok(J::o(vec![
+                ("written", J::n(target as f64)),
+                ("unchanged", J::B(cur == target)),
+                ("reboot_required", J::B(true)),
+            ]))
+        }
+        other => Err(format!("未知 gpu 动作: {other}（status|hybrid|dgpu）")),
+    }
+}
+
+fn api_kb(ec: &mut EcBackend, action: &str, value: Option<&str>, dry_run: bool) -> Result<J, String> {
+    match action {
+        "status" => {
+            let status = ec.uw_read(KBD_BL_STATUS)?;
+            let mode = ec.uw_read(KBD_BL_RGB_MODE)?;
+            let (r, g, b) = (
+                ec.uw_read(KBD_BL_RGB_RED)?,
+                ec.uw_read(KBD_BL_RGB_GREEN)?,
+                ec.uw_read(KBD_BL_RGB_BLUE)?,
+            );
+            Ok(J::o(vec![
+                ("white_only", J::B(status & KBD_BL_STATUS_WHITE_ONLY != 0)),
+                ("disabled", J::B(status & KBD_BL_STATUS_DISABLED != 0)),
+                ("brightness_level", J::n(((status & KBD_BL_STATUS_BRI_MASK) >> 5) as f64)),
+                ("brightness_max", J::n(KBD_BL_STATUS_BRI_MAX as f64)),
+                ("rainbow", J::B(mode & KBD_BL_RGB_MODE_RAINBOW != 0)),
+                ("color", J::o(vec![
+                    ("r", J::n(r as f64)),
+                    ("g", J::n(g as f64)),
+                    ("b", J::n(b as f64)),
+                ])),
+            ]))
+        }
+        "color" => {
+            let (r, g, b) = parse_kb_color(value.ok_or("kb color 需要颜色参数")?)
+                .ok_or_else(|| format!("无法解析颜色"))?;
+            let (r2, g2, b2) = (kb_convert_channel(r), kb_convert_channel(g), kb_convert_channel(b));
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("r", J::n(r2 as f64)), ("g", J::n(g2 as f64)), ("b", J::n(b2 as f64))]));
+            }
+            ec.uw_write(KBD_BL_RGB_RED, r2)?;
+            ec.uw_write(KBD_BL_RGB_GREEN, g2)?;
+            ec.uw_write(KBD_BL_RGB_BLUE, b2)?;
+            kb_mode_rmw(ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+            Ok(J::o(vec![("r", J::n(r2 as f64)), ("g", J::n(g2 as f64)), ("b", J::n(b2 as f64))]))
+        }
+        "rainbow" => {
+            let on = matches!(value, Some("on") | Some("1") | Some("开"));
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("rainbow", J::B(on))]));
+            }
+            kb_mode_rmw(
+                ec,
+                if on { KBD_BL_RGB_MODE_RAINBOW | KBD_BL_RGB_MODE_APPLY } else { KBD_BL_RGB_MODE_APPLY },
+                if on { 0 } else { KBD_BL_RGB_MODE_RAINBOW },
+            )?;
+            Ok(J::o(vec![("rainbow", J::B(on))]))
+        }
+        "brightness" => {
+            let pct: u32 = value.ok_or("kb brightness 需要参数")?.parse().map_err(|_| "无效亮度")?;
+            if pct > 100 {
+                return Err("亮度需要 0-100".into());
+            }
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("percent", J::n(pct as f64))]));
+            }
+            let white_only = ec.uw_read(KBD_BL_STATUS)? & KBD_BL_STATUS_WHITE_ONLY != 0;
+            if white_only {
+                let v = (pct * 255 / 100) as u8;
+                ec.uw_write(KBD_BL_WHITE_BRI_IMM, v)?;
+                return Ok(J::o(vec![("white_brightness", J::n(v as f64))]));
+            }
+            let level = ((pct * (KBD_BL_STATUS_BRI_MAX as u32) + 50) / 100).min(4) as u8;
+            let cur = ec.uw_read(KBD_BL_STATUS)?;
+            let next = (cur & !KBD_BL_STATUS_BRI_MASK & !KBD_BL_STATUS_DISABLED) | (level << 5) | KBD_BL_STATUS_RESET;
+            ec.uw_write(KBD_BL_STATUS, next)?;
+            Ok(J::o(vec![("percent", J::n(pct as f64)), ("level", J::n(level as f64))]))
+        }
+        "on" | "off" => {
+            let enable = action == "on";
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("enabled", J::B(enable))]));
+            }
+            let cur = ec.uw_read(KBD_BL_STATUS)?;
+            let next = if enable { cur & !KBD_BL_STATUS_DISABLED } else { cur | KBD_BL_STATUS_DISABLED };
+            ec.uw_write(KBD_BL_STATUS, next)?;
+            Ok(J::o(vec![("enabled", J::B(enable))]))
+        }
+        "reset" => {
+            if dry_run {
+                return Ok(J::o(vec![("dry_run", J::B(true)), ("action", J::s("reset"))]));
+            }
+            // 注意：0x078C 的 0x10 与 0x0767 的 APPLY_COLOR 都是一次性触发位，EC 消费后
+            // 自动清零；单独置 0x10 只是「重新应用当前设置」，颜色不会有任何变化。
+            // 与 CLI `kb reset` 保持一致：把固件默认色 0x076C-0x076E 抄回 0x0769-0x076B
+            // 再 APPLY，才是真正的“恢复默认颜色”。
+            let (dr, dg, db) = (
+                ec.uw_read(KBD_BL_DEFAULT_RED)?,
+                ec.uw_read(KBD_BL_DEFAULT_GREEN)?,
+                ec.uw_read(KBD_BL_DEFAULT_BLUE)?,
+            );
+            ec.uw_write(KBD_BL_RGB_RED, dr)?;
+            ec.uw_write(KBD_BL_RGB_GREEN, dg)?;
+            ec.uw_write(KBD_BL_RGB_BLUE, db)?;
+            kb_mode_rmw(ec, KBD_BL_RGB_MODE_APPLY, 0)?;
+            let back = (
+                ec.uw_read(KBD_BL_RGB_RED)?,
+                ec.uw_read(KBD_BL_RGB_GREEN)?,
+                ec.uw_read(KBD_BL_RGB_BLUE)?,
+            );
+            if back != (dr, dg, db) {
+                return Err(format!(
+                    "回读校验失败: 0x{:02X}/0x{:02X}/0x{:02X} != 0x{dr:02X}/0x{dg:02X}/0x{db:02X}",
+                    back.0, back.1, back.2
+                ));
+            }
+            Ok(J::o(vec![
+                ("reset", J::B(true)),
+                ("color", J::o(vec![
+                    ("r", J::n(dr as f64)),
+                    ("g", J::n(dg as f64)),
+                    ("b", J::n(db as f64)),
+                ])),
+            ]))
+        }
+        other => Err(format!("未知 kb 动作: {other}")),
+    }
+}
+
+fn api_ec_read(ec: &mut EcBackend, addr: &str, count: u16) -> Result<J, String> {
+    let a = parse_hex_u16(addr).map_err(|_| format!("无效地址: {addr}"))?;
+    let mut vals = Vec::new();
+    for k in 0..count {
+        let v = ec.uw_read(a + k)?;
+        vals.push(J::o(vec![("addr", J::s(&format!("{:04X}", a + k))), ("value", J::n(v as f64))]));
+    }
+    Ok(J::o(vec![("addr", J::s(addr)), ("values", J::A(vals))]))
+}
+
+// ---------------------------------------------------------------- serve 守护模式（前端接口）
+
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::{Arc, Mutex};
+
+struct ListenState {
+    /// 开启监听的连接 id 集合。
+    ///
+    /// 按连接持有（而不是一个全局 bool）有两个好处：
+    /// 1. 最后一个前端进程退出（含被 Ctrl+C 杀掉）时自动退出监听，不会留下守护进程
+    ///    继续抢占模式键——这是全局 bool + 前端主动 disable 做不到的；
+    /// 2. 多前端同时连接时，一方退出不会影响另一方。
+    owners: std::collections::HashSet<u64>,
+    current: Mode,
+    last_bits: u8,
+}
+
+impl ListenState {
+    fn enabled(&self) -> bool {
+        !self.owners.is_empty()
+    }
+}
+
+fn serve_broadcast(clients: &Mutex<Vec<UnixStream>>, ev: &J) {
+    let mut line = ev.dump();
+    line.push('\n');
+    let mut cs = clients.lock().unwrap();
+    cs.retain_mut(|s| s.write_all(line.as_bytes()).is_ok());
+}
+
+fn serve_handle(
+    req: &J,
+    ec: &Arc<Mutex<EcBackend>>,
+    ls: &Arc<Mutex<ListenState>>,
+    args: &Args,
+    conn: u64,
+) -> J {
+    let id = req.get("id").cloned().unwrap_or(J::Null);
+    let ok_resp = |data: J| J::o(vec![("id", id.clone()), ("ok", J::B(true)), ("data", data)]);
+    let err_resp = |msg: &str| J::o(vec![("id", id.clone()), ("ok", J::B(false)), ("error", J::s(msg))]);
+
+    let Some(cmd) = req.get("cmd").and_then(|v| v.as_str()) else {
+        return err_resp("缺少 cmd 字段");
+    };
+    let arg = |k: &str| req.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let result: Result<J, String> = match cmd {
+        "help" => Ok(J::o(vec![(
+            "commands",
+            J::A(vec![
+                J::o(vec![("cmd", J::s("status")), ("desc", J::s("查询性能模式"))]),
+                J::o(vec![("cmd", J::s("mode")), ("args", J::o(vec![("value", J::s("1|2|3|4|office|game|turbo|custom"))]))]),
+                J::o(vec![("cmd", J::s("gpu")), ("args", J::o(vec![("action", J::s("status|hybrid|dgpu"))]))]),
+                J::o(vec![("cmd", J::s("kb")), ("args", J::o(vec![("action", J::s("status|color|rainbow|brightness|on|off|reset")), ("value", J::s("按 action 而定"))]))]),
+                J::o(vec![("cmd", J::s("ec-read")), ("args", J::o(vec![("addr", J::s("0x751")), ("count", J::s("默认 1"))]))]),
+                J::o(vec![("cmd", J::s("listen")), ("args", J::o(vec![("enable", J::B(true))])), ("desc", J::s("启用后推送 {\"event\":\"mode-changed\",...}"))]),
+            ]),
+        )])),
+        "status" => {
+            let mut ecg = ec.lock().unwrap();
+            api_status_ec(&mut ecg)
+        }
+        "mode" => {
+            let Some(v) = arg("value") else {
+                return err_resp("mode 需要 value 参数");
+            };
+            let mut ecg = ec.lock().unwrap();
+            let r = api_mode_set_ec(&mut ecg, &v);
+            // 本工具自己的写入不能被监听线程当成「按键」——否则刚点完「狂暴」，
+            // 监听线程会把模式再推进一档。写完把寄存器值同步为监听基线。
+            let bits = if r.is_ok() { ecg.uw_read(args.mode_reg).ok() } else { None };
+            drop(ecg);
+            if let Some(bits) = bits {
+                if let Ok(mut lsg) = ls.lock() {
+                    lsg.last_bits = bits;
+                    if let Some(m) = mode_from_bits(bits) {
+                        lsg.current = m;
+                    }
+                }
+            }
+            r
+        }
+        "gpu" => {
+            let action = arg("action").unwrap_or_else(|| "status".into());
+            api_gpu(args, &action, false)
+        }
+        "kb" => {
+            let action = arg("action").unwrap_or_else(|| "status".into());
+            let mut ecg = ec.lock().unwrap();
+            api_kb(&mut ecg, &action, arg("value").as_deref(), false)
+        }
+        "ec-read" => {
+            let addr = arg("addr").unwrap_or_else(|| "0x751".into());
+            let count = req.get("count").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()).unwrap_or(1u64);
+            let mut ecg = ec.lock().unwrap();
+            api_ec_read(&mut ecg, &addr, count as u16)
+        }
+        "listen" => {
+            let enable = req.get("enable").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut lsg = ls.lock().unwrap();
+            if enable {
+                // 第一个 owner 负责初始化基线；后来者直接加入，不打断已在进行的循环
+                if lsg.owners.is_empty() {
+                    let mut ecg = ec.lock().unwrap();
+                    lsg.current = ecg.read_state().ok().and_then(|(m, _)| m).unwrap_or(Mode::Office);
+                    lsg.last_bits = ecg.uw_read(args.mode_reg).unwrap_or(0);
+                }
+                lsg.owners.insert(conn);
+            } else {
+                lsg.owners.remove(&conn);
+            }
+            let listening = lsg.enabled();
+            let owners = lsg.owners.len() as f64;
+            Ok(J::o(vec![("listening", J::B(listening)), ("owners", J::n(owners))]))
+        }
+        other => Err(format!("未知命令: {other}（help 查看命令列表）")),
+    };
+
+    match result {
+        Ok(data) => ok_resp(data),
+        Err(e) => err_resp(&e),
+    }
+}
+
+fn cmd_serve(args: &Args) {
+    if args.backend == BackendSel::PlatformProfile {
+        die("serve 仅支持 ec-direct 后端");
+    }
+    let socket_path = PathBuf::from(args.positional.get(1).cloned().unwrap_or_else(|| "/run/firebat-cc.sock".into()));
+    let ec = Arc::new(Mutex::new(EcBackend::open(args.mode_reg).unwrap_or_else(|e| die(&e))));
+
+    let _ = std::fs::remove_file(&socket_path);
+    if let Some(parent) = socket_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let listener = UnixListener::bind(&socket_path)
+        .unwrap_or_else(|e| die(&format!("绑定 {} 失败: {e}", socket_path.display())));
+    let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
+
+    let clients: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
+    let ls: Arc<Mutex<ListenState>> = Arc::new(Mutex::new(ListenState {
+        owners: std::collections::HashSet::new(),
+        current: Mode::Office,
+        last_bits: 0,
+    }));
+
+    println!("firebat-cc serve 已启动: {}", socket_path.display());
+    println!("协议: 每行一个 JSON 请求，如 {{\"id\":1,\"cmd\":\"status\"}}；先发 help 查看命令");
+    println!("监听事件推送形如 {{\"event\":\"mode-changed\",\"from\":...,\"to\":...}}");
+    println!("Ctrl+C 退出。");
+
+    // 模式监听轮询线程
+    {
+        let ec2 = ec.clone();
+        let clients2 = clients.clone();
+        let ls2 = ls.clone();
+        let mode_reg = args.mode_reg;
+        let interval = args.interval;
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(interval));
+            let enabled = ls2.lock().map(|l| l.enabled()).unwrap_or(false);
+            if !enabled {
+                continue;
+            }
+            let ev = (|| -> Option<J> {
+                let mut lsg = ls2.lock().unwrap();
+                if !lsg.enabled() {
+                    return None;
+                }
+                let mut ecg = ec2.lock().unwrap();
+                let bits = ecg.uw_read(mode_reg).ok()?;
+                if bits == lsg.last_bits {
+                    return None;
+                }
+                let from = lsg.current;
+                let target = next_mode(from);
+                ecg.write_mode(target).ok()?;
+                lsg.current = target;
+                lsg.last_bits = ecg.uw_read(mode_reg).unwrap_or(bits);
+                Some(J::o(vec![
+                    ("event", J::s("mode-changed")),
+                    (
+                        "from",
+                        J::o(vec![("index", J::n(from.index() as f64)), ("name", J::s(from.zh()))]),
+                    ),
+                    (
+                        "to",
+                        J::o(vec![("index", J::n(target.index() as f64)), ("name", J::s(target.zh()))]),
+                    ),
+                ]))
+            })();
+            if let Some(ev) = ev {
+                serve_broadcast(&clients2, &ev);
+            }
+        });
+    }
+
+    // 接受连接
+    let mut next_conn: u64 = 1;
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let conn_id = next_conn;
+        next_conn += 1;
+        if let Ok(clone) = stream.try_clone() {
+            clients.lock().unwrap().push(clone);
+        }
+        let ec2 = ec.clone();
+        let ls2 = ls.clone();
+        let args2 = args.clone();
+        std::thread::spawn(move || {
+            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.0\"}\n");
+            let mut reader = std::io::BufReader::new(match stream.try_clone() {
+                Ok(r) => r,
+                Err(_) => return,
+            });
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut reader, &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let resp = match jparse(&line) {
+                    Ok(req) => serve_handle(&req, &ec2, &ls2, &args2, conn_id),
+                    Err(e) => J::o(vec![
+                        ("id", J::Null),
+                        ("ok", J::B(false)),
+                        ("error", J::s(&format!("JSON 解析失败: {e}"))),
+                    ]),
+                };
+                let mut out = resp.dump();
+                out.push('\n');
+                if stream.write_all(out.as_bytes()).is_err() {
+                    break;
+                }
+            }
+            // 连接断开：把它从监听 owner 里摘掉。前端崩溃 / 被 Ctrl+C 时不会走到
+            // listen enable:false，这里兜底，避免守护进程继续抢占模式键。
+            if let Ok(mut lsg) = ls2.lock() {
+                lsg.owners.remove(&conn_id);
+            }
+            // 断开的客户端在下次广播时由 serve_broadcast 的 retain 自动剔除
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_roundtrip() {
+        let src = r#"{"id":1,"cmd":"kb","args":{"value":"ff8000","on":true,"n":null,"arr":[1,2.5,-3]}}"#;
+        let v = jparse(src).unwrap();
+        assert_eq!(v.get("cmd").and_then(|j| j.as_str()), Some("kb"));
+        assert_eq!(v.get("args").unwrap().get("on").unwrap().as_bool(), Some(true));
+        let dump = v.dump();
+        let v2 = jparse(&dump).unwrap();
+        assert_eq!(v, v2);
+    }
+
+    #[test]
+    fn json_escapes() {
+        let v = J::s("a\"b\\c\nd\te");
+        let d = v.dump();
+        assert_eq!(jparse(&d).unwrap(), v);
     }
 }

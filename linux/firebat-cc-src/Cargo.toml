@@ -1,6 +1,6 @@
 [package]
 name = "firebat-cc"
-version = "0.4.0"
+version = "0.6.0"
 edition = "2021"
 description = "Firebat GX 性能模式控制工具 (Linux, 逆向 ControlCenter 5.49.51.44)"
 license = "GPL-2.0+"
