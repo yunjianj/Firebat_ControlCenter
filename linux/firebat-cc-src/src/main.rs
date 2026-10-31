@@ -607,6 +607,7 @@ struct Args {
     backend: BackendSel,
     mode_reg: u16,
     dry_run: bool,
+    interval: u64,
     mux_offset: u16,
     hybrid_value: u8,
     dgpu_value: u8,
@@ -617,6 +618,7 @@ fn parse_args() -> Result<Args, String> {
     let mut backend = BackendSel::Auto;
     let mut mode_reg = MODE_REG_DEFAULT;
     let mut dry_run = false;
+    let mut interval: u64 = 300;
     let mut mux_offset = MUX_OFFSET_DEFAULT;
     let mut hybrid_value = MUX_HYBRID_DEFAULT;
     let mut dgpu_value = MUX_DGPU_DEFAULT;
@@ -662,12 +664,20 @@ fn parse_args() -> Result<Args, String> {
                 dgpu_value = parse_hex_u16(v).map_err(|_| format!("无效值: {v}"))? as u8;
             }
             "--dry-run" => dry_run = true,
+            "--interval" => {
+                i += 1;
+                let v = argv.get(i).ok_or("--interval 缺少参数")?;
+                interval = v.parse().map_err(|_| format!("无效间隔: {v}（需要毫秒数，50-5000）"))?;
+                if !(50..=5000).contains(&interval) {
+                    return Err(format!("轮询间隔 {interval}ms 超出范围（50-5000）"));
+                }
+            }
             "-h" | "--help" | "help" => {
                 print_help();
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.3.3");
+                println!("firebat-cc 0.4.0");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -679,6 +689,7 @@ fn parse_args() -> Result<Args, String> {
         backend,
         mode_reg,
         dry_run,
+        interval,
         mux_offset,
         hybrid_value,
         dgpu_value,
@@ -694,11 +705,12 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.3.3 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
+        "firebat-cc 0.4.0 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
   firebat-cc mode <MODE>                   切换性能模式
+  firebat-cc listen                        监听模式：检测性能模式键并按序切换
   firebat-cc ec-read <ADDR> [COUNT]        读取 EC 寄存器（调试用，16 进制地址）
   firebat-cc gpu status                    查看显卡输出模式（MUX）
   firebat-cc gpu hybrid                    切换为混合输出（重启生效）
@@ -723,6 +735,7 @@ COLOR 取值: RRGGBB 十六进制（如 ff8000）或名称:
   --hybrid-value <n>                            混合输出对应值覆盖（默认 0）
   --dgpu-value <n>                              独显直连对应值覆盖（默认 1）
   --dry-run                                     只显示将要执行的操作，不实际写入
+  --interval <ms>                               listen 轮询间隔（默认 300，50-5000）
   -h, --help                                    显示帮助
   -v, --version                                 显示版本
 
@@ -767,6 +780,7 @@ fn main() {
     match cmd.as_str() {
         "status" => cmd_status(&args),
         "mode" => cmd_mode(&args),
+        "listen" => cmd_listen(&args),
         "ec-read" => cmd_ec_read(&args),
         "gpu" => cmd_gpu(&args),
         "kb" => cmd_kb(&args),
@@ -1387,4 +1401,86 @@ fn kb_status(ec: &mut EcBackend) -> Result<(), String> {
 fn die(e: &str) -> ! {
     eprintln!("错误: {e}");
     std::process::exit(1);
+}
+
+// ---------------------------------------------------------------- 监听模式（性能模式键）
+
+/// 性能模式热键循环顺序：办公 → 游戏(均衡) → 狂暴 → 循环（自定义档等同办公）
+fn next_mode(m: Mode) -> Mode {
+    match m {
+        Mode::Office | Mode::Custom => Mode::Game,
+        Mode::Game => Mode::Turbo,
+        Mode::Turbo => Mode::Office,
+    }
+}
+
+fn cmd_listen(args: &Args) {
+    if args.backend == BackendSel::PlatformProfile {
+        die("listen 命令仅支持 ec-direct 后端（需要轮询 EC 模式寄存器原始值）");
+    }
+    let mut ec = EcBackend::open(args.mode_reg).unwrap_or_else(|e| die(&e));
+    let interval = args.interval;
+
+    let (mode, detail) = ec.read_state().unwrap_or_else(|e| die(&e));
+    let mut current = mode.unwrap_or(Mode::Office);
+    let mut last_bits = ec.uw_read(args.mode_reg).unwrap_or_else(|e| die(&e));
+
+    println!("监听模式已启动（Ctrl+C 退出）");
+    println!("  轮询: EC 0x{:04X} 每 {interval}ms 一次", args.mode_reg);
+    println!("  当前模式: {} 档 - {}（{}）", current.index(), current.zh(), detail);
+    println!("  切换顺序: 办公(1) → 游戏(均衡)(2) → 狂暴(3) → 办公 循环");
+    if args.dry_run {
+        println!("  [dry-run] 检测到按键后只报告、不写入。");
+    }
+    println!("  提示: 每次检测到模式寄存器被外部改变（即按键按下），都会强制写入循环中的下一档。");
+    println!();
+
+    loop {
+        std::thread::sleep(Duration::from_millis(interval));
+        let bits = match ec.uw_read(args.mode_reg) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("警告: EC 读取失败: {e}");
+                continue;
+            }
+        };
+        if bits == last_bits {
+            continue;
+        }
+
+        // 模式寄存器被外部改变 = 性能模式键按下（EC 固件自行改档）
+        let detected = mode_from_bits(bits);
+        let target = next_mode(current);
+
+        if args.dry_run {
+            let det = detected
+                .map(|m| format!("{} 档 - {}", m.index(), m.zh()))
+                .unwrap_or_else(|| format!("未知(0x{bits:02X})"));
+            println!(
+                "检测到按键: 0x{last_bits:02X} → 0x{bits:02X}（EC 切到了 {det}）；目标下一档: {} 档 - {}（dry-run 不写入）",
+                target.index(),
+                target.zh()
+            );
+            last_bits = bits;
+            if let Some(m) = detected {
+                current = m;
+            }
+            continue;
+        }
+
+        match ec.write_mode(target) {
+            Ok(()) => {
+                current = target;
+                println!("检测到性能模式键 → 已切换到: {} 档 - {}", target.index(), target.zh());
+            }
+            Err(e) => {
+                eprintln!("错误: 写入下一档失败: {e}");
+                if let Some(m) = detected {
+                    current = m;
+                }
+            }
+        }
+        // 以写入后的实际寄存器值为新基线（我们的写入不算外部变化）
+        last_bits = ec.uw_read(args.mode_reg).unwrap_or(bits);
+    }
 }
