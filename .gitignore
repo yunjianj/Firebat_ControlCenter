@@ -42,6 +42,16 @@ desktop.ini
 /dist/
 /decompiled/
 /extracted/
+/Windows/extracted/
+
+# ---- WorkBuddy 会话数据与系统杂项 ----
+/.workbuddy/
+/.Trash-0/
+
+# ---- Rust 构建产物与编译输出 ----
+linux/firebat-cc-src/target/
+# 单文件二进制由 `cargo build --release` 重新生成；如需入库用 `git add -f`
+linux/firebat-cc
 
 # ---- 保留小型可读配置与说明 ----
 !/Windows/TF_ControlCenter_5.49.51.44GX_Firebat/setup.ini
