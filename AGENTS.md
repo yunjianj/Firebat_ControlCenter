@@ -73,3 +73,12 @@ Windows 安装包与解包产物仅作为逆向素材隔离存放在 `reference/
 - `reference/windows/` —— 原安装包、`extracted/` 解包产物、UWP 包（含托盘程序与语言
   资源）。仅作逆向取证使用，**不得被 Linux 侧代码或构建引用**。
 
+## 7. GitHub Release 附件规则
+
+- Release 的预构建程序**仅以压缩包形式提供**，将 CLI 与 GUI 放在同一目录，并保留
+  可执行权限；不得另外上传单独的 `firebat-cc`、`firebat-cc-gui` 二进制附件。
+- **不上传独立 SHA256 校验文件**（如 `SHA256SUMS`、`*.sha256`），使用 GitHub
+  为 Release 附件提供的官方摘要功能。
+- Release 下载说明应与实际附件一致，不得保留单独二进制或独立校验文件的下载、
+  使用说明。GitHub 自动生成的源码归档不受上述预构建附件规则影响。
+
