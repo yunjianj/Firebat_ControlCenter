@@ -291,6 +291,7 @@ mod tests {
         }))
         .unwrap();
         let main = AppWindow::new().unwrap();
+        assert!(!main.global::<crate::Nav>().get_ec_debug_enabled());
         OSD.with(|slot| *slot.borrow_mut() = Some(Controller::new(main.as_weak(), None)));
         observe(1);
         OSD.with(|slot| {

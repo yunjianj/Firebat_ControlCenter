@@ -176,14 +176,7 @@ export component PerformancePage inherits Rectangle {
                 bits: "EC 0x0751 → 0x30";
                 level: 3;
                 active: Backend.mode-index == 3;
-                clicked => {
-                    Backend.confirm-title = "切换到狂暴档？";
-                    Backend.confirm-body = "狂暴档会放宽功耗墙并让风扇全速运转，插电时更合适。该操作可随时切回其他档位。";
-                    Backend.confirm-ok = "切换到狂暴";
-                    Backend.confirm-danger = false;
-                    Backend.pending-action = "mode:3";
-                    Backend.confirm-visible = true;
-                }
+                clicked => { Backend.request-mode(3); }
             }
         }
 

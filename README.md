@@ -55,7 +55,7 @@ sudo pacman -S --needed base-devel rust pkgconf
 cargo fetch --locked
 mkdir -p dist
 PKGDEST="$PWD/dist" makepkg --syncdeps
-sudo pacman -U ./dist/firebat-control-center-0.6.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./dist/firebat-control-center-0.6.1-4-x86_64.pkg.tar.zst
 ```
 
 `makepkg` 使用当前工作区的源码并离线构建，安装包保存在项目的 `dist/` 目录，
@@ -85,12 +85,13 @@ cargo build --release -p firebat-cc-gui   # 仅 GUI
 
 ```bash
 ./target/release/firebat-cc-gui             # 后端未运行时自动启动同目录 firebat-cc serve
+./target/release/firebat-cc-gui --ec-debug  # 显示默认隐藏的 EC 调试页面
 ```
 
 GUI 先连接已有后端；未运行时通过 `pkexec` 请求系统授权并自动启动同目录后端，
 需要安装 polkit 并运行桌面认证代理。GUI 保持普通用户权限；自定义 `--socket` /
 `FIREBAT_CC_SOCK` 同样传给自动启动的后端。关闭窗口会进入托盘并保留模式键监听；
-左键托盘恢复窗口，右键菜单可「打开」或「关闭」。GUI 自动启动的后端使用随机凭证；
+左键托盘显示窗口并请求置前，右键菜单可「打开」或「关闭」。GUI 自动启动的后端使用随机凭证；
 从菜单关闭 GUI 后，会同步关闭该后端并清理 EC 写支持。手动启动的已有后端保持独立。
 桌面不支持托盘时，关闭窗口直接退出 GUI。
 挡位切换时会在左上角显示半透明黑底白字提示，5 秒后消失；托盘运行时同样生效。

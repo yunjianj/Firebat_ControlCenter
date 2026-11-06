@@ -17,6 +17,7 @@ export struct EcCell {
 // 界面导航（纯 UI 状态）
 export global Nav {
     in-out property <int> page: 0;
+    in-out property <bool> ec-debug-enabled: false;
     out property <[string]> titles: ["概览", "性能模式", "显卡输出", "键盘背光", "EC 调试"];
     out property <[string]> subtitles: [
         "硬件的当前状态一览",

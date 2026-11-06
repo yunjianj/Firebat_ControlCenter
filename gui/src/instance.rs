@@ -47,16 +47,16 @@ fn directory() -> Result<PathBuf, String> {
 }
 
 impl Instance {
-    pub fn claim(toggle: bool, token: Option<String>) -> Result<Option<Self>, String> {
+    pub fn claim(toggle: bool, token: Option<String>, ec_debug: bool) -> Result<Option<Self>, String> {
         use std::hash::{Hash, Hasher};
         let mut session = std::collections::hash_map::DefaultHasher::new();
         std::env::var_os("WAYLAND_DISPLAY").hash(&mut session);
         std::env::var_os("DISPLAY").hash(&mut session);
         let base = directory()?.join(format!("{:016x}", session.finish()));
-        Self::claim_at(&base, toggle, token)
+        Self::claim_at(&base, toggle, token, ec_debug)
     }
 
-    fn claim_at(base: &Path, toggle: bool, token: Option<String>) -> Result<Option<Self>, String> {
+    fn claim_at(base: &Path, toggle: bool, token: Option<String>, ec_debug: bool) -> Result<Option<Self>, String> {
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -96,7 +96,7 @@ impl Instance {
                 stream
                     .set_write_timeout(Some(Duration::from_secs(2)))
                     .map_err(|e| e.to_string())?;
-                let mut request = serde_json::json!({"toggle":toggle,"token":token}).to_string();
+                let mut request = serde_json::json!({"toggle":toggle,"token":token,"ec_debug":ec_debug}).to_string();
                 request.push('\n');
                 stream
                     .write_all(request.as_bytes())
@@ -142,6 +142,7 @@ impl Instance {
                             .get("toggle")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
+                        let ec_debug = value.get("ec_debug").and_then(|v| v.as_bool()).unwrap_or(false);
                         let token = value
                             .get("token")
                             .and_then(|v| v.as_str())
@@ -150,6 +151,9 @@ impl Instance {
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
+                                if ec_debug {
+                                    ui.global::<crate::Nav>().set_ec_debug_enabled(true);
+                                }
                                 if toggle {
                                     crate::window::toggle(&ui, token);
                                 } else {
@@ -182,8 +186,8 @@ mod tests {
     fn launch_forwards_instead_of_starting_another_instance() {
         let base =
             std::env::temp_dir().join(format!("firebat-instance-test-{}", std::process::id()));
-        let mut first = Instance::claim_at(&base, false, None).unwrap().unwrap();
-        assert!(Instance::claim_at(&base, true, Some("test-token".into()))
+        let mut first = Instance::claim_at(&base, false, None, false).unwrap().unwrap();
+        assert!(Instance::claim_at(&base, true, Some("test-token".into()), true)
             .unwrap()
             .is_none());
         let (stream, _) = first.listener.take().unwrap().accept().unwrap();
@@ -192,6 +196,7 @@ mod tests {
         let request: serde_json::Value = serde_json::from_str(&request).unwrap();
         assert_eq!(request["toggle"], true);
         assert_eq!(request["token"], "test-token");
+        assert_eq!(request["ec_debug"], true);
         // 模拟退出时 socket 已移除，但其他文件描述符稍后才释放锁。
         let retained = first._lock.try_clone().unwrap();
         drop(first);
@@ -199,7 +204,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
             drop(retained);
         });
-        assert!(Instance::claim_at(&base, false, None).unwrap().is_some());
+        assert!(Instance::claim_at(&base, false, None, false).unwrap().is_some());
         release.join().unwrap();
         std::fs::remove_file(base.with_extension("lock")).unwrap();
     }

@@ -146,6 +146,7 @@ fn main() {
     };
 
     for page in 0..5 {
+        ui.global::<Nav>().set_ec_debug_enabled(page == 4);
         ui.global::<Nav>().set_page(page);
         shoot(&ui, &mut buf, &page.to_string());
     }

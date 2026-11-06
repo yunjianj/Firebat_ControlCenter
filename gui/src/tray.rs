@@ -51,7 +51,7 @@ impl ksni::Tray for Tray {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "Firebat 控制中心".into(),
-            description: "左键打开，右键选择打开或关闭".into(),
+            description: "左键打开并置前，右键选择打开或关闭".into(),
             ..Default::default()
         }
     }
@@ -307,6 +307,11 @@ mod tests {
         tray.activate(0, 0); // 左键恢复。
         events.drain();
         assert!(ui.window().is_visible());
+        tray.activate(0, 0); // 已显示时再次点击仍保持显示与监听。
+        events.drain();
+        assert!(ui.window().is_visible());
+        assert!(ui.global::<crate::Backend>().get_listening());
+        assert_eq!(ui.global::<crate::Nav>().get_page(), 3);
         for _ in 0..3 {
             ui.window().dispatch_event(WindowEvent::CloseRequested);
             assert!(!ui.window().is_visible());

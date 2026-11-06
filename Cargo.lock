@@ -1049,12 +1049,14 @@ version = "0.1.0"
 dependencies = [
  "ksni",
  "libc",
+ "raw-window-handle",
  "rgb",
  "serde_json",
  "slint",
  "slint-build",
  "smithay-client-toolkit",
  "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

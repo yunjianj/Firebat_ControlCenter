@@ -20,22 +20,18 @@ pub fn take_token() -> Option<String> {
 }
 
 pub fn open(ui: &AppWindow, token: Option<String>) {
-    // 始终恢复同一个 Slint 主窗口，不为激活令牌额外 hide/show 重建可见窗口。
+    // 始终复用同一个 Slint 主窗口。
     use slint::winit_030::winit::platform::wayland::WindowExtWayland;
-    if ui.window().is_minimized()
-        && ui
-            .window()
-            .with_winit_window(|w| w.xdg_toplevel().is_some())
-            .unwrap_or(false)
-    {
+    let wayland = ui.window().with_winit_window(|w| w.xdg_toplevel().is_some()).unwrap_or(false);
+    if wayland && ui.window().is_minimized() {
         // Wayland 不支持 set_minimized(false)；先释放已最小化的原生资源再显示。
         // AppWindow 本身不变，同时仍只有一个主窗口。
         if let Err(e) = ui.hide() {
-            eprintln!("恢复最小化窗口失败: {e}");
+            eprintln!("准备激活窗口失败: {e}");
             return;
         }
     }
-    set_token(token);
+    set_token(token.clone());
     ui.window().set_minimized(false);
     if let Err(e) = ui.show() {
         eprintln!("打开窗口失败: {e}");
@@ -44,7 +40,18 @@ pub fn open(ui: &AppWindow, token: Option<String>) {
     ui.window().set_minimized(false);
     ui.window().with_winit_window(|w| {
         w.set_minimized(false);
-        w.focus_window();
+        if wayland {
+            // winit 的 Wayland focus_window 是空操作，须把托盘的令牌交给合成器。
+            let activated = token.as_deref().is_some_and(|token| match crate::wayland_activation::activate(w, token) {
+                Ok(()) => true,
+                Err(e) => { eprintln!("Wayland 窗口激活失败: {e}"); false }
+            });
+            if !activated {
+                w.request_user_attention(Some(slint::winit_030::winit::window::UserAttentionType::Informational));
+            }
+        } else {
+            w.focus_window();
+        }
     });
 }
 

@@ -84,7 +84,7 @@ export component AppWindow inherits Window {
                 NavItem { label: "性能模式"; glyph: 1; active: Nav.page == 1; clicked => { Nav.page = 1; } }
                 NavItem { label: "显卡输出"; glyph: 2; active: Nav.page == 2; clicked => { Nav.page = 2; } }
                 NavItem { label: "键盘背光"; glyph: 3; active: Nav.page == 3; clicked => { Nav.page = 3; } }
-                NavItem { label: "EC 调试"; glyph: 4; active: Nav.page == 4; clicked => { Nav.page = 4; } }
+                if Nav.ec-debug-enabled: NavItem { label: "EC 调试"; glyph: 4; active: Nav.page == 4; clicked => { Nav.page = 4; } }
 
                 Rectangle { vertical-stretch: 1; }
 
@@ -203,7 +203,7 @@ export component AppWindow inherits Window {
                 if Nav.page == 1: PerformancePage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
                 if Nav.page == 2: DisplayPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
                 if Nav.page == 3: KeyboardPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
-                if Nav.page == 4: DebugPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
+                if Nav.ec-debug-enabled && Nav.page == 4: DebugPage { x: 24px; y: 16px; width: parent.width - 48px; height: parent.height - 32px; }
             }
         }
     }

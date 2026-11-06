@@ -4,7 +4,7 @@
 //! 通信（协议见 `docs/serve-协议.md`），因此 GUI 进程**不需要 root**。
 //!
 //! 用法：
-//!   ./firebat-cc-gui [--socket /run/firebat-cc.sock]
+//!   ./firebat-cc-gui [--socket /run/firebat-cc.sock] [--ec-debug]
 //!   未连接后端时自动通过 pkexec 启动同目录的 firebat-cc serve。
 
 slint::include_modules!();
@@ -16,6 +16,7 @@ mod osd;
 mod desktop;
 mod instance;
 mod window;
+mod wayland_activation;
 
 use client::Client;
 use serde_json::{Map, Value};
@@ -725,11 +726,7 @@ fn wire_callbacks(ui: &AppWindow, cli: Arc<Client>) {
             b.set_confirm_visible(false);
             b.set_pending_action("".into());
 
-            if let Some(rest) = action.strip_prefix("mode:") {
-                if let Ok(idx) = rest.parse::<i32>() {
-                    do_set_mode(weak.clone(), cli.clone(), idx);
-                }
-            } else if let Some(rest) = action.strip_prefix("gpu:") {
+            if let Some(rest) = action.strip_prefix("gpu:") {
                 do_gpu_write(weak.clone(), cli.clone(), rest.to_string());
             } else if action == "kb:reset" {
                 do_kb(weak.clone(), cli.clone(), "reset", None);
@@ -988,7 +985,8 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     let token = window::take_environment_token();
-    let mut instance = match instance::Instance::claim(std::env::args().any(|arg| arg == "--toggle-window"), token.clone()) {
+    let ec_debug = std::env::args().any(|arg| arg == "--ec-debug");
+    let mut instance = match instance::Instance::claim(std::env::args().any(|arg| arg == "--toggle-window"), token.clone(), ec_debug) {
         Ok(Some(instance)) => instance,
         Ok(None) => return Ok(()),
         Err(e) => { eprintln!("GUI 激活失败：{e}"); std::process::exit(1); }
@@ -1001,6 +999,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     osd::install_backend()?;
     let ui = AppWindow::new()?;
+    ui.global::<Nav>().set_ec_debug_enabled(ec_debug);
     osd::init(&ui)?;
     let running = Arc::new(AtomicBool::new(true));
 
