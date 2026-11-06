@@ -17,6 +17,8 @@ desktop.ini
 # ---- Rust 构建产物 ----
 # 工作区单一 target/ 目录（根包与 gui/ 共用）
 /target/
+/pkg/
+/*.pkg.tar.*
 # 单文件二进制由 `cargo build --release` 重新生成；如需入库用 `git add -f`
 /firebat-cc
 /firebat-cc-gui

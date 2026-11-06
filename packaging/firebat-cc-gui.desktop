@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Firebat Control Center
+Name[zh_CN]=Firebat 控制中心
+Comment=Firebat GX performance and keyboard control
+Exec=/usr/bin/firebat-cc-gui --toggle-window
+Icon=firebat-cc-gui
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupWMClass=firebat-cc-gui
+StartupNotify=true

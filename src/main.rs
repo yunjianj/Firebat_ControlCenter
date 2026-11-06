@@ -700,7 +700,7 @@ fn parse_argv(argv: Vec<String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.6.0");
+                println!("firebat-cc 0.6.1");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -737,7 +737,7 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.6.0 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
+        "firebat-cc 0.6.1 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
@@ -2126,6 +2126,13 @@ impl ListenState {
     }
 }
 
+// 监听线程和模式写入必须按相同顺序持锁，直到写入及监听基线更新全部完成。
+fn with_mode_state<T, R>(ls: &Mutex<ListenState>, ec: &Mutex<T>, f: impl FnOnce(&mut ListenState, &mut T) -> R) -> R {
+    let mut state = ls.lock().unwrap();
+    let mut device = ec.lock().unwrap();
+    f(&mut state, &mut device)
+}
+
 fn serve_broadcast(clients: &Mutex<Vec<(u64, UnixStream)>>, ev: &J) {
     let mut line = ev.dump();
     line.push('\n');
@@ -2183,21 +2190,17 @@ fn serve_handle(
             let Some(v) = arg("value") else {
                 return err_resp("mode 需要 value 参数");
             };
-            let mut ecg = ec.lock().unwrap();
-            let r = api_mode_set_ec(&mut ecg, &v);
-            // 本工具自己的写入不能被监听线程当成「按键」——否则刚点完「狂暴」，
-            // 监听线程会把模式再推进一档。写完把寄存器值同步为监听基线。
-            let bits = if r.is_ok() { ecg.uw_read(args.mode_reg).ok() } else { None };
-            drop(ecg);
-            if let Some(bits) = bits {
-                if let Ok(mut lsg) = ls.lock() {
+            with_mode_state(ls, ec, |lsg, ecg| {
+                let r = api_mode_set_ec(ecg, &v);
+                // 即使写入或回读校验失败，也尽力同步可能已经改变的寄存器。
+                if let Ok(bits) = ecg.uw_read(args.mode_reg) {
                     lsg.last_bits = bits;
                     if let Some(m) = mode_from_bits(bits) {
                         lsg.current = m;
                     }
                 }
-            }
-            r
+                r
+            })
         }
         "gpu" => {
             let action = arg("action").unwrap_or_else(|| "status".into());
@@ -2390,7 +2393,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
         let args2 = args.clone();
         let operations2 = operations.clone();
         std::thread::spawn(move || {
-            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.0\"}\n");
+            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.1\"}\n");
             let mut reader = std::io::BufReader::new(match stream.try_clone() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -2463,6 +2466,42 @@ fn wait_for_input_close(mut input: impl Read) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_write_and_listener_share_atomic_baseline() {
+        let ls = Arc::new(Mutex::new(ListenState {
+            owners: [1].into_iter().collect(), current: Mode::Office, last_bits: Mode::Office.ec_bits(),
+        }));
+        let ec = Arc::new(Mutex::new(Mode::Office.ec_bits()));
+        let (written_tx, written_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+        let writer = {
+            let (ls, ec) = (ls.clone(), ec.clone());
+            std::thread::spawn(move || with_mode_state(&ls, &ec, |state, bits| {
+                *bits = Mode::Turbo.ec_bits();
+                written_tx.send(()).unwrap();
+                resume_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                state.last_bits = *bits;
+                state.current = Mode::Turbo;
+            }))
+        };
+        written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let listener = {
+            let (ls, ec) = (ls.clone(), ec.clone());
+            std::thread::spawn(move || with_mode_state(&ls, &ec, |state, bits| {
+                observed_tx.send(*bits != state.last_bits).unwrap();
+            }))
+        };
+        assert!(observed_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        resume_tx.send(()).unwrap();
+        assert!(!observed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        writer.join().unwrap();
+        listener.join().unwrap();
+        // 后续真实的外部变化仍然能被检测到。
+        *ec.lock().unwrap() = Mode::Office.ec_bits();
+        assert!(with_mode_state(&ls, &ec, |state, bits| *bits != state.last_bits));
+    }
 
     #[test]
     fn gui_lifetime_arguments_and_input_eof() {

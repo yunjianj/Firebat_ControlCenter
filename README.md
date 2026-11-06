@@ -46,6 +46,27 @@
 
 ## 构建
 
+### Arch Linux 安装包
+
+在仓库根目录以普通用户执行（首次构建需联网获取 Cargo 依赖）：
+
+```bash
+sudo pacman -S --needed base-devel rust pkgconf
+cargo fetch --locked
+mkdir -p dist
+PKGDEST="$PWD/dist" makepkg --syncdeps
+sudo pacman -U ./dist/firebat-control-center-0.6.1-1-x86_64.pkg.tar.zst
+```
+
+`makepkg` 使用当前工作区的源码并离线构建，安装包保存在项目的 `dist/` 目录，
+安装后 CLI 和 GUI 一同位于 `/usr/bin/`，桌面入口与图标由包管理。
+安装后可从应用菜单启动，或执行 `firebat-cc-gui`；卸载时执行
+`sudo pacman -R firebat-control-center`。桌面图标由 pacman 管理，GUI 不再自动注册。
+旧版本用户请先完全退出 GUI，再以原普通用户运行 `./uninstall-desktop.sh`，移除旧的
+用户级入口和图标，避免它们覆盖系统安装的版本；必要时重新固定任务栏图标。
+
+### 直接构建
+
 ```bash
 # Arch
 sudo pacman -S --needed base-devel pkgconf libxkbcommon wayland fontconfig freetype2

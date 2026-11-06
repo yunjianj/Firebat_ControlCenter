@@ -72,11 +72,14 @@ cargo build --release -p firebat-cc-gui
 
 ## 运行
 
-普通用户启动时会自动注册 Firebat 桌面入口与官方图标，并统一 Wayland app_id /
-X11 WM_CLASS，让标题栏、任务栏及应用菜单关联同一图标。资源位于
-`${XDG_DATA_HOME:-~/.local/share}/applications/` 与 `icons/hicolor/256x256/apps/`。
-移动二进制后再次启动会更新入口；也可以单独运行 `firebat-cc-gui --install-desktop`
-注册，无需图形环境、后端或 root。若任务栏固定了旧入口，请重开 GUI 并重新固定。
+Arch Linux 可通过仓库根目录的 `PKGBUILD` 构建并用 pacman 安装，详见根目录
+README。桌面入口与图标由安装包管理，GUI 启动时不会写入用户桌面资源目录。
+Wayland app_id 与 X11 WM_CLASS 仍与桌面入口一致。
+
+从旧版本迁移时，请先从托盘菜单退出 GUI，以原普通用户在仓库根目录运行
+`./uninstall-desktop.sh`，清除旧的用户级桌面入口和图标，避免其覆盖安装包版本。
+脚本不会移除 pacman 安装的系统级文件或用户配置。如果任务栏固定了旧入口，
+请取消固定后重新固定。
 
 每个桌面会话只运行一份 GUI。任务栏入口通过 `--toggle-window` 唤回已有窗口，
 隐藏/最小化时恢复，已聚焦时最小化，未聚焦时请求置前；不会创建另一份 GUI 或
@@ -177,7 +180,7 @@ gui/                            # Cargo 成员包 firebat-cc-gui（构建产物�
 │   ├── daemon.rs               # 启动时连接检测、同目录后端启动及系统授权
 │   ├── tray.rs                 # 托盘、窗口隐藏/恢复及退出
 │   ├── osd.rs                  # 挡位 OSD 控制、X11 提示及 5 秒计时
-│   ├── desktop.rs              # 桌面应用 ID、desktop 入口与图标注册
+│   ├── desktop.rs              # 桌面应用 ID
 │   ├── instance.rs             # 单实例锁、桌面启动请求转发
 │   ├── window.rs               # 主窗口激活、任务栏切换与 Wayland 令牌
 │   └── osd/wayland.rs          # Wayland 原生 layer-shell 覆盖层

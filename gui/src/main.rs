@@ -965,14 +965,6 @@ fn self_test(socket: &std::path::Path) -> Result<(), String> {
 
 fn main() -> Result<(), slint::PlatformError> {
     let path = client::resolve_socket_path();
-    if std::env::args().any(|arg| arg == "--install-desktop") {
-        match desktop::register() {
-            Ok(()) => println!("Firebat 桌面入口与图标已注册"),
-            Err(e) => { eprintln!("桌面注册失败：{e}"); std::process::exit(1); }
-        }
-        return Ok(());
-    }
-
     // 外观诊断：打印配置文件、系统探测结果与最终解析，便于排查"跟随系统不生效"
     if std::env::args().any(|a| a == "--print-theme") {
         let mode = load_theme_mode();
@@ -1008,7 +1000,6 @@ fn main() -> Result<(), slint::PlatformError> {
     let daemon_session = Arc::new(daemon::Session::default());
 
     osd::install_backend()?;
-    let desktop_result = desktop::register();
     let ui = AppWindow::new()?;
     osd::init(&ui)?;
     let running = Arc::new(AtomicBool::new(true));
@@ -1092,7 +1083,6 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     push_log(&ui, format!("界面已启动，socket: {}", path.display()), 0);
-    if let Err(e) = desktop_result { push_log(&ui, format!("桌面图标注册失败：{e}"), 2); }
     push_log(&ui, "正在连接后端；未运行时将请求系统授权并自动启动同目录后端", 0);
     let starting = Arc::new(AtomicBool::new(true));
 
