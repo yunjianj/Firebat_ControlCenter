@@ -55,7 +55,7 @@ sudo pacman -S --needed base-devel rust pkgconf
 cargo fetch --locked
 mkdir -p dist
 PKGDEST="$PWD/dist" makepkg --syncdeps
-sudo pacman -U ./dist/firebat-control-center-0.6.1-4-x86_64.pkg.tar.zst
+sudo pacman -U ./dist/firebat-control-center-0.6.2-1-x86_64.pkg.tar.zst
 ```
 
 `makepkg` 使用当前工作区的源码并离线构建，安装包保存在项目的 `dist/` 目录，
