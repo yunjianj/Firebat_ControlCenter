@@ -700,7 +700,7 @@ fn parse_argv(argv: Vec<String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.6.1");
+                println!("firebat-cc 0.6.2");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -737,7 +737,7 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.6.1 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
+        "firebat-cc 0.6.2 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
@@ -2393,7 +2393,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
         let args2 = args.clone();
         let operations2 = operations.clone();
         std::thread::spawn(move || {
-            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.1\"}\n");
+            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.2\"}\n");
             let mut reader = std::io::BufReader::new(match stream.try_clone() {
                 Ok(r) => r,
                 Err(_) => return,
