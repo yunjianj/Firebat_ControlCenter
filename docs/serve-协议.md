@@ -82,7 +82,7 @@ Unix domain socket，**每行一个 JSON**（`\n` 分隔）。
 | `gpu` | `action`: `status\|hybrid\|dgpu` | status: `{var, mux_raw, interpreted, payload_len}`；切换: `{written, unchanged, reboot_required}` |
 | `kb` | `action`: `status\|color\|rainbow\|brightness\|on\|off\|reset`；`value`: 颜色 `ff8000`/`red`、亮度 0-100、on/off | status: `{white_only, disabled, brightness_level, brightness_max, rainbow, color:{r,g,b}}` |
 | `ec-read` | `addr`: `0x751`，`count`: 默认 1 | `{addr, values:[{addr,value},...]}` |
-| `listen` | `enable`：**JSON bool**（不是字符串） | `{listening, owners}`；启用后守护进程轮询 EC 0x0751，检测到按键即按 办公(1)→游戏(2)→狂暴(3) 顺序推进档位，并向所有通过访问验证的连接（未启用验证时为所有连接）广播 `mode-changed` 事件 |
+| `listen` | `enable`：**JSON bool**（不是字符串） | `{listening, owners, behavior:"observe"}`；启用后守护进程轮询 EC 0x0751，检测到模式变化时只汇报实际档位，不写入模式，并向所有通过访问验证的连接（未启用验证时为所有连接）广播 `mode-changed` 事件 |
 
 kb color 的 r/g/b 为 EC 通道值（0-50 值域）；kb brightness 为 EC 0-4 级。
 
@@ -94,19 +94,25 @@ EC 消费后自动清零——单置 `0x10` 只是「重新应用当前颜色」
 
 ### listen：监听模式（前端应常开）
 
-EC 固件自行处理性能模式键（Fn 组合键），用户态拿不到任何输入事件，只能**轮询
-0x0751 事后纠正**。因此前端连上守护进程后应立刻发一次 `listen {enable:true}`，
-并保持到退出：
+EC 固件自行处理性能模式键（Fn 组合键），用户态通过**轮询 0x0751 观察实际模式**。
+监听只汇报结果，不修改模式或切换顺序；也能观察其他程序造成的模式变化。
+前端连上守护进程后可发一次 `listen {enable:true}`，并保持到退出：
 
 - **按连接持有**：`enable:true` 把当前连接的 id 加进 owner 集合，`false` 移除；
   `listening` 表示集合是否非空，`owners` 是当前持有者数量。多个前端互不影响。
+- 响应中的 `behavior:"observe"` 标识只观察、不改档；旧后端缺少该字段，不能据此
+  假定其监听行为相同。
 - **断线自动摘除**：owner 连接断开（前端崩溃、被 `Ctrl+C`、图形界面直接关掉）时，
   守护进程自动把它从集合里去掉，最后一个 owner 断开即退出监听。
   所以前端不必依赖"退出时发 disable"，那句只是双保险。
 - **自身写入同步基线**：通过 `mode` 命令改档后，守护进程同步 `last_bits` 与 `current`，
-  不会把自己的写入误判成按键（否则点完「狂暴」会被再推进一档）。
+  不会重复汇报工具自身的切换；显式 `mode` 命令仍按请求执行。
 - 事件 `{"event":"mode-changed","from":{"index","name"},"to":{...}}` 广播给**所有**
   连接（启用访问验证时仅限已验证的连接），不只是 owner；未开启监听时不会有事件。
+- 仅模式位（掩码 `0xB0`）变化触发事件，风扇增强等其他位变化不触发。
+  未知模式值以 `{index:0,name:"未知"}` 汇报，不进行猜测或修正。
+  两次轮询之间的多次切换只能观察净变化。
+- CLI `firebat-cc listen` 同样只汇报实际模式；`--dry-run` 不改变监听行为。
 - 监听期间建议前端保留兜底的 `status` 轮询（守护进程重启、事件丢失时可自愈）。
   事件只带 index/name，`bits`/`detail` 需再取一次 `status`。
 
