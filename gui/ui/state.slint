@@ -37,8 +37,8 @@ export global Backend {
     /// 外观模式："auto"（跟随系统，默认）/ "light" / "dark"。
     /// 实际的深浅由 Theme.dark 承载，Rust 侧按此模式解析后写入。
     in-out property <string> theme-mode: "auto";
-    /// 是否已接管性能模式键（守护进程监听模式）。界面运行时保持开启，
-    /// 由守护进程轮询 EC 0x0751 并在按键后按我们的顺序推进档位。
+    /// 是否已监听性能模式变化（守护进程监听模式）。界面运行时保持开启，
+    /// 由守护进程轮询 EC 0x0751 并汇报实际档位，不修改模式。
     in-out property <bool> listening: false;
 
     // ---------------- 性能模式 ----------------

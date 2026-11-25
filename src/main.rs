@@ -293,16 +293,19 @@ impl EcBackend {
 
     fn read_state(&mut self) -> Result<(Option<Mode>, String), String> {
         let bits = self.uw_read(self.mode_reg)?;
+        Ok((mode_from_bits(bits), self.describe_state(bits)))
+    }
+
+    fn describe_state(&self, bits: u8) -> String {
         let boost = if bits & FAN_MODE_BOOST != 0 {
             " [风扇增强 BIT6=1]"
         } else {
             ""
         };
-        let detail = format!(
+        format!(
             "EC 0x{:04X} = 0x{:02X} (0b{:08b}){}",
             self.mode_reg, bits, bits, boost
-        );
-        Ok((mode_from_bits(bits), detail))
+        )
     }
 
     /// 读-改-写：仅触碰模式位，保留 BIT6（风扇增强）等其他位；写后回读校验。
@@ -700,7 +703,7 @@ fn parse_argv(argv: Vec<String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-v" | "--version" => {
-                println!("firebat-cc 0.6.2");
+                println!("firebat-cc 0.6.3");
                 std::process::exit(0);
             }
             other => positional.push(other.to_string()),
@@ -737,12 +740,12 @@ fn parse_hex_u16(s: &str) -> Result<u16, ()> {
 
 fn print_help() {
     println!(
-        "firebat-cc 0.6.2 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
+        "firebat-cc 0.6.3 — Firebat GX 性能模式/显卡输出/键盘背光控制工具（Linux 逆向移植版）
 
 用法:
   firebat-cc status                        查看当前性能模式
   firebat-cc mode <MODE>                   切换性能模式
-  firebat-cc listen                        监听模式：检测性能模式键并按序切换
+  firebat-cc listen                        监听模式：只汇报实际性能模式变化，不切换模式
   firebat-cc serve [SOCKET] [--auth-token TOKEN]  守护模式：自动加载 ec_sys、开启写支持，退出时关闭
   firebat-cc ec-read <ADDR> [COUNT]        读取 EC 寄存器（调试用，16 进制地址）
   firebat-cc gpu status                    查看显卡输出模式（MUX）
@@ -1523,13 +1526,11 @@ fn die(e: &str) -> ! {
 
 // ---------------------------------------------------------------- 监听模式（性能模式键）
 
-/// 性能模式热键循环顺序：办公 → 游戏(均衡) → 狂暴 → 循环（自定义档等同办公）
-fn next_mode(m: Mode) -> Mode {
-    match m {
-        Mode::Office | Mode::Custom => Mode::Game,
-        Mode::Game => Mode::Turbo,
-        Mode::Turbo => Mode::Office,
-    }
+/// 只比较模式位；风扇增强等其他位的变化不代表模式切换。
+fn observed_mode_change(last_bits: &mut u8, bits: u8) -> bool {
+    let changed = (*last_bits & PERF_MODE_MASK) != (bits & PERF_MODE_MASK);
+    *last_bits = bits;
+    changed
 }
 
 fn cmd_listen(args: &Args) {
@@ -1539,18 +1540,15 @@ fn cmd_listen(args: &Args) {
     let mut ec = EcBackend::open(args.mode_reg).unwrap_or_else(|e| die(&e));
     let interval = args.interval;
 
-    let (mode, detail) = ec.read_state().unwrap_or_else(|e| die(&e));
-    let mut current = mode.unwrap_or(Mode::Office);
     let mut last_bits = ec.uw_read(args.mode_reg).unwrap_or_else(|e| die(&e));
+    let describe = |bits| mode_from_bits(bits)
+        .map(|m| format!("{} 档 - {}", m.index(), m.zh()))
+        .unwrap_or_else(|| format!("未知（0x{bits:02X}）"));
 
     println!("监听模式已启动（Ctrl+C 退出）");
     println!("  轮询: EC 0x{:04X} 每 {interval}ms 一次", args.mode_reg);
-    println!("  当前模式: {} 档 - {}（{}）", current.index(), current.zh(), detail);
-    println!("  切换顺序: 办公(1) → 游戏(均衡)(2) → 狂暴(3) → 办公 循环");
-    if args.dry_run {
-        println!("  [dry-run] 检测到按键后只报告、不写入。");
-    }
-    println!("  提示: 每次检测到模式寄存器被外部改变（即按键按下），都会强制写入循环中的下一档。");
+    println!("  当前模式: {}", describe(last_bits));
+    println!("  仅汇报实际模式变化，不修改模式；切换顺序由固件或其他控制程序决定。");
     println!();
 
     loop {
@@ -1562,44 +1560,9 @@ fn cmd_listen(args: &Args) {
                 continue;
             }
         };
-        if bits == last_bits {
-            continue;
+        if observed_mode_change(&mut last_bits, bits) {
+            println!("检测到性能模式变化 → 当前模式: {}", describe(bits));
         }
-
-        // 模式寄存器被外部改变 = 性能模式键按下（EC 固件自行改档）
-        let detected = mode_from_bits(bits);
-        let target = next_mode(current);
-
-        if args.dry_run {
-            let det = detected
-                .map(|m| format!("{} 档 - {}", m.index(), m.zh()))
-                .unwrap_or_else(|| format!("未知(0x{bits:02X})"));
-            println!(
-                "检测到按键: 0x{last_bits:02X} → 0x{bits:02X}（EC 切到了 {det}）；目标下一档: {} 档 - {}（dry-run 不写入）",
-                target.index(),
-                target.zh()
-            );
-            last_bits = bits;
-            if let Some(m) = detected {
-                current = m;
-            }
-            continue;
-        }
-
-        match ec.write_mode(target) {
-            Ok(()) => {
-                current = target;
-                println!("检测到性能模式键 → 已切换到: {} 档 - {}", target.index(), target.zh());
-            }
-            Err(e) => {
-                eprintln!("错误: 写入下一档失败: {e}");
-                if let Some(m) = detected {
-                    current = m;
-                }
-            }
-        }
-        // 以写入后的实际寄存器值为新基线（我们的写入不算外部变化）
-        last_bits = ec.uw_read(args.mode_reg).unwrap_or(bits);
     }
 }
 
@@ -1825,12 +1788,13 @@ fn jp_value(b: &[char], i: usize) -> Result<(J, usize), String> {
 // ---------------------------------------------------------------- API 层（--json 与 serve 共用）
 
 fn api_status_ec(ec: &mut EcBackend) -> Result<J, String> {
-    let (mode, detail) = ec.read_state()?;
-    let cur = mode.unwrap_or(Mode::Office);
+    let bits = ec.uw_read(ec.mode_reg)?;
+    let mode = mode_from_bits(bits);
+    let detail = ec.describe_state(bits);
     Ok(J::o(vec![
         ("mode", mode.map(|m| J::n(m.index() as f64)).unwrap_or(J::Null)),
-        ("name", J::s(cur.zh())),
-        ("bits", J::s(&format!("{:02X}", ec.uw_read(MODE_REG_DEFAULT).unwrap_or(0)))),
+        ("name", J::s(mode.map(|m| m.zh()).unwrap_or("未知"))),
+        ("bits", J::s(&format!("{bits:02X}"))),
         ("backend", J::s("ec-direct")),
         ("detail", J::s(&detail)),
     ]))
@@ -2113,16 +2077,34 @@ struct ListenState {
     ///
     /// 按连接持有（而不是一个全局 bool）有两个好处：
     /// 1. 最后一个前端进程退出（含被 Ctrl+C 杀掉）时自动退出监听，不会留下守护进程
-    ///    继续抢占模式键——这是全局 bool + 前端主动 disable 做不到的；
+    ///    继续轮询——这是全局 bool + 前端主动 disable 做不到的；
     /// 2. 多前端同时连接时，一方退出不会影响另一方。
     owners: std::collections::HashSet<u64>,
-    current: Mode,
+    current: Option<Mode>,
     last_bits: u8,
 }
 
 impl ListenState {
     fn enabled(&self) -> bool {
         !self.owners.is_empty()
+    }
+
+    /// 只消费读取结果，不持有 EC 后端，不能发起模式写入。
+    fn observe(&mut self, bits: u8) -> Option<J> {
+        if !observed_mode_change(&mut self.last_bits, bits) {
+            return None;
+        }
+        let from = self.current;
+        self.current = mode_from_bits(bits);
+        let info = |mode: Option<Mode>| J::o(vec![
+            ("index", J::n(mode.map(|m| m.index()).unwrap_or(0) as f64)),
+            ("name", J::s(mode.map(|m| m.zh()).unwrap_or("未知"))),
+        ]);
+        Some(J::o(vec![
+            ("event", J::s("mode-changed")),
+            ("from", info(from)),
+            ("to", info(self.current)),
+        ]))
     }
 }
 
@@ -2195,9 +2177,7 @@ fn serve_handle(
                 // 即使写入或回读校验失败，也尽力同步可能已经改变的寄存器。
                 if let Ok(bits) = ecg.uw_read(args.mode_reg) {
                     lsg.last_bits = bits;
-                    if let Some(m) = mode_from_bits(bits) {
-                        lsg.current = m;
-                    }
+                    lsg.current = mode_from_bits(bits);
                 }
                 r
             })
@@ -2221,11 +2201,14 @@ fn serve_handle(
             let enable = req.get("enable").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut lsg = ls.lock().unwrap();
             if enable {
-                // 第一个 owner 负责初始化基线；后来者直接加入，不打断已在进行的循环
+                // 第一个 owner 负责初始化基线；后来者直接加入，不打断已在进行的监听
                 if lsg.owners.is_empty() {
                     let mut ecg = ec.lock().unwrap();
-                    lsg.current = ecg.read_state().ok().and_then(|(m, _)| m).unwrap_or(Mode::Office);
-                    lsg.last_bits = ecg.uw_read(args.mode_reg).unwrap_or(0);
+                    lsg.last_bits = match ecg.uw_read(args.mode_reg) {
+                        Ok(bits) => bits,
+                        Err(e) => return err_resp(&e),
+                    };
+                    lsg.current = mode_from_bits(lsg.last_bits);
                 }
                 lsg.owners.insert(conn);
             } else {
@@ -2233,7 +2216,7 @@ fn serve_handle(
             }
             let listening = lsg.enabled();
             let owners = lsg.owners.len() as f64;
-            Ok(J::o(vec![("listening", J::B(listening)), ("owners", J::n(owners))]))
+            Ok(J::o(vec![("listening", J::B(listening)), ("owners", J::n(owners)), ("behavior", J::s("observe"))]))
         }
         other => Err(format!("未知命令: {other}（help 查看命令列表）")),
     };
@@ -2300,7 +2283,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
     let clients: Arc<Mutex<Vec<(u64, UnixStream)>>> = Arc::new(Mutex::new(Vec::new()));
     let ls: Arc<Mutex<ListenState>> = Arc::new(Mutex::new(ListenState {
         owners: std::collections::HashSet::new(),
-        current: Mode::Office,
+        current: Some(Mode::Office),
         last_bits: 0,
     }));
 
@@ -2337,25 +2320,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
                 }
                 let mut ecg = ec2.lock().unwrap();
                 let bits = ecg.uw_read(mode_reg).ok()?;
-                if bits == lsg.last_bits {
-                    return None;
-                }
-                let from = lsg.current;
-                let target = next_mode(from);
-                ecg.write_mode(target).ok()?;
-                lsg.current = target;
-                lsg.last_bits = ecg.uw_read(mode_reg).unwrap_or(bits);
-                Some(J::o(vec![
-                    ("event", J::s("mode-changed")),
-                    (
-                        "from",
-                        J::o(vec![("index", J::n(from.index() as f64)), ("name", J::s(from.zh()))]),
-                    ),
-                    (
-                        "to",
-                        J::o(vec![("index", J::n(target.index() as f64)), ("name", J::s(target.zh()))]),
-                    ),
-                ]))
+                lsg.observe(bits)
             })();
             drop(_operation);
             if let Some(ev) = ev {
@@ -2393,7 +2358,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
         let args2 = args.clone();
         let operations2 = operations.clone();
         std::thread::spawn(move || {
-            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.2\"}\n");
+            let _ = stream.write_all(b"{\"event\":\"hello\",\"version\":\"0.6.3\"}\n");
             let mut reader = std::io::BufReader::new(match stream.try_clone() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -2437,7 +2402,7 @@ fn run_serve(args: &Args) -> Result<(), String> {
                 }
             }
             // 连接断开：把它从监听 owner 里摘掉。前端崩溃 / 被 Ctrl+C 时不会走到
-            // listen enable:false，这里兜底，避免守护进程继续抢占模式键。
+            // listen enable:false，这里兜底，避免无客户端时继续轮询。
             if let Ok(mut lsg) = ls2.lock() {
                 lsg.owners.remove(&conn_id);
             }
@@ -2468,9 +2433,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn listener_reports_observed_modes_without_enforcing_a_cycle() {
+        let mut state = ListenState {
+            owners: [1].into_iter().collect(),
+            current: Some(Mode::Office),
+            last_bits: PERF_MODE_OFFICE,
+        };
+        // 固件原生顺序 1→3→2→1，以及其他程序发起的非顺序切换。
+        let mut previous = Mode::Office;
+        for mode in [Mode::Turbo, Mode::Game, Mode::Office, Mode::Game, Mode::Turbo, Mode::Game] {
+            let bits = mode.ec_bits() | FAN_MODE_BOOST;
+            let event = state.observe(bits).unwrap();
+            assert_eq!(event.get("event"), Some(&J::s("mode-changed")));
+            assert_eq!(event.get("from").unwrap().get("index"), Some(&J::n(previous.index() as f64)));
+            assert_eq!(event.get("to").unwrap().get("index"), Some(&J::n(mode.index() as f64)));
+            assert_eq!(state.last_bits, bits);
+            assert_eq!(state.current, Some(mode));
+            assert!(state.observe(bits).is_none());
+            previous = mode;
+        }
+    }
+
+    #[test]
+    fn listener_ignores_other_bits_and_reports_unknown_modes() {
+        let mut state = ListenState {
+            owners: [1].into_iter().collect(),
+            current: Some(Mode::Office), last_bits: PERF_MODE_OFFICE,
+        };
+        for extra in [FAN_MODE_BOOST, 0x01, 0x0F, 0] {
+            let bits = PERF_MODE_OFFICE | extra;
+            assert!(state.observe(bits).is_none());
+            assert_eq!(state.last_bits, bits);
+            assert_eq!(state.current, Some(Mode::Office));
+        }
+        let event = state.observe(0).unwrap();
+        assert_eq!(event.get("to").unwrap().get("index"), Some(&J::n(0)));
+        assert_eq!(event.get("to").unwrap().get("name"), Some(&J::s("未知")));
+        assert_eq!(state.current, None);
+        assert!(state.observe(FAN_MODE_BOOST).is_none());
+        let event = state.observe(PERF_MODE_TURBO).unwrap();
+        assert_eq!(event.get("from").unwrap().get("index"), Some(&J::n(0)));
+        assert_eq!(event.get("to").unwrap().get("index"), Some(&J::n(3)));
+    }
+
+    #[test]
     fn mode_write_and_listener_share_atomic_baseline() {
         let ls = Arc::new(Mutex::new(ListenState {
-            owners: [1].into_iter().collect(), current: Mode::Office, last_bits: Mode::Office.ec_bits(),
+            owners: [1].into_iter().collect(), current: Some(Mode::Office), last_bits: Mode::Office.ec_bits(),
         }));
         let ec = Arc::new(Mutex::new(Mode::Office.ec_bits()));
         let (written_tx, written_rx) = std::sync::mpsc::channel();
@@ -2483,14 +2492,14 @@ mod tests {
                 written_tx.send(()).unwrap();
                 resume_rx.recv_timeout(Duration::from_secs(2)).unwrap();
                 state.last_bits = *bits;
-                state.current = Mode::Turbo;
+                state.current = Some(Mode::Turbo);
             }))
         };
         written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let listener = {
             let (ls, ec) = (ls.clone(), ec.clone());
             std::thread::spawn(move || with_mode_state(&ls, &ec, |state, bits| {
-                observed_tx.send(*bits != state.last_bits).unwrap();
+                observed_tx.send(state.observe(*bits).is_some()).unwrap();
             }))
         };
         assert!(observed_rx.recv_timeout(Duration::from_millis(50)).is_err());
@@ -2500,7 +2509,7 @@ mod tests {
         listener.join().unwrap();
         // 后续真实的外部变化仍然能被检测到。
         *ec.lock().unwrap() = Mode::Office.ec_bits();
-        assert!(with_mode_state(&ls, &ec, |state, bits| *bits != state.last_bits));
+        assert!(with_mode_state(&ls, &ec, |state, bits| state.observe(*bits).is_some()));
     }
 
     #[test]
@@ -2561,7 +2570,7 @@ mod tests {
             mode_reg: MODE_REG_DEFAULT,
         }));
         let ls = Arc::new(Mutex::new(ListenState {
-            owners: [7].into_iter().collect(), current: Mode::Office, last_bits: 0xA0,
+            owners: [7].into_iter().collect(), current: Some(Mode::Office), last_bits: 0xA0,
         }));
         let args = test_args(&["serve", "--auth-token", "secret"]).unwrap();
         let help = jparse(r#"{"id":1,"cmd":"help","token":"secret"}"#).unwrap();
@@ -2582,6 +2591,21 @@ mod tests {
         let no_auth = test_args(&["serve"]).unwrap();
         let help = jparse(r#"{"cmd":"help"}"#).unwrap();
         assert_eq!(serve_handle(&help, &ec, &ls, &no_auth, 7).get("ok"), Some(&J::B(true)));
+    }
+
+    #[test]
+    fn listen_response_declares_observe_behavior() {
+        let ec = Arc::new(Mutex::new(EcBackend {
+            io: OpenOptions::new().read(true).write(true).open("/dev/null").unwrap(),
+            mode_reg: MODE_REG_DEFAULT,
+        }));
+        let ls = Arc::new(Mutex::new(ListenState {
+            owners: [7].into_iter().collect(), current: Some(Mode::Office), last_bits: PERF_MODE_OFFICE,
+        }));
+        let req = jparse(r#"{"cmd":"listen","enable":false}"#).unwrap();
+        let response = serve_handle(&req, &ec, &ls, &test_args(&["serve"]).unwrap(), 7);
+        assert_eq!(response.get("data").unwrap().get("behavior"), Some(&J::s("observe")));
+        assert_eq!(response.get("data").unwrap().get("listening"), Some(&J::B(false)));
     }
 
     #[test]

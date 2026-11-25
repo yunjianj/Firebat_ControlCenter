@@ -481,17 +481,6 @@ fn do_refresh(weak: Weak<AppWindow>, cli: Arc<Client>) {
     });
 }
 
-/// 每个模式档位对应的 EC 模式位（与后端一致）
-fn mode_bits_of(index: i32) -> &'static str {
-    match index {
-        1 => "A0",
-        2 => "20",
-        3 => "30",
-        4 => "A0",
-        _ => "--",
-    }
-}
-
 fn handle_event(ui: &AppWindow, ev: Value, cli: Arc<Client>) {
     match ev.get("event").and_then(|v| v.as_str()) {
         Some("hello") => {
@@ -528,9 +517,12 @@ fn handle_event(ui: &AppWindow, ev: Value, cli: Arc<Client>) {
                 let b = ui.global::<Backend>();
                 b.set_mode_index(idx);
                 b.set_mode_name(to.clone().into());
-                b.set_mode_bits(mode_bits_of(idx).into());
+                // 事件不包含寄存器原值，不能从档位推造完整字节或风扇位。
+                b.set_mode_bits("--".into());
+                b.set_mode_raw(-1);
+                b.set_fan_boost(false);
             }
-            push_log(ui, format!("性能模式键：{from} → {to}"), 2);
+            push_log(ui, format!("性能模式变化：{from} → {to}"), 2);
             toast(ui, format!("模式已切换为 {to}"), 1);
             refresh_status(ui.as_weak(), cli);
         }
@@ -549,8 +541,8 @@ fn refresh_status(weak: Weak<AppWindow>, cli: Arc<Client>) {
 
 static LISTEN_ON: AtomicBool = AtomicBool::new(false);
 
-/// 让守护进程进入「监听模式」：由它轮询 EC 0x0751，按键后按
-/// 办公(1) → 游戏(2) → 狂暴(3) 的顺序推进档位，并推 mode-changed 事件过来。
+/// 让守护进程进入「监听模式」：轮询 EC 0x0751，
+/// 只汇报实际模式变化并推送 mode-changed 事件，不干预切换。
 /// 幂等：已开启时直接返回。
 fn ensure_listen(weak: Weak<AppWindow>, cli: Arc<Client>) {
     if LISTEN_ON.swap(true, Ordering::Relaxed) {
@@ -560,9 +552,19 @@ fn ensure_listen(weak: Weak<AppWindow>, cli: Arc<Client>) {
     let mut params = Map::new();
     params.insert("enable".to_string(), Value::Bool(true));
     run_cmd(weak, cli, "listen", params, |ui, res| match res {
-        Ok(_) => {
+        Ok(data) if data.get("listening").and_then(Value::as_bool) == Some(true) => {
             ui.global::<Backend>().set_listening(true);
-            push_log(ui, "已开启监听模式：性能模式键由守护进程接管", 1);
+            if data.get("behavior").and_then(Value::as_str) == Some("observe") {
+                push_log(ui, "已开启监听模式：仅汇报实际模式变化", 1);
+            } else {
+                push_log(ui, "后端未声明监听行为；旧版后端可能会改变性能模式", 2);
+                toast(ui, "后端版本可能较旧，监听可能改变性能模式", 2);
+            }
+        }
+        Ok(_) => {
+            LISTEN_ON.store(false, Ordering::Relaxed);
+            ui.global::<Backend>().set_listening(false);
+            push_log(ui, "开启监听模式失败：后端未确认监听已启用", 3);
         }
         Err(e) => {
             LISTEN_ON.store(false, Ordering::Relaxed);

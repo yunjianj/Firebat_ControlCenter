@@ -49,6 +49,45 @@ mod tests {
     use std::os::unix::net::UnixListener;
 
     #[test]
+    fn passive_listener_forwards_actual_mode_events() {
+        let dir = std::env::temp_dir().join(format!("firebat-client-observe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mock.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(req["cmd"], "listen");
+            assert_eq!(req["enable"], true);
+            let reply = json!({"id":req["id"],"ok":true,"data":{"listening":true,"owners":1,"behavior":"observe"}});
+            writeln!(stream, "{reply}").unwrap();
+            for (from, to) in [(1, 3), (3, 2), (2, 0)] {
+                let event = json!({"event":"mode-changed","from":{"index":from},"to":{"index":to}});
+                writeln!(stream, "{event}").unwrap();
+            }
+            line.clear();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0, "监听事件不能触发模式写入");
+        });
+        let (tx, rx) = mpsc::channel();
+        let client = Client::new(path.clone(), tx, None);
+        let mut params = Map::new();
+        params.insert("enable".into(), Value::Bool(true));
+        let data = client.call("listen", params).unwrap();
+        assert_eq!(data["behavior"], "observe");
+        for index in [3, 2, 0] {
+            assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap()["to"]["index"], index);
+        }
+        client.disconnect();
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
     fn credential_on_every_request_reconnect_and_close() {
         let dir = std::env::temp_dir().join(format!("firebat-client-token-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

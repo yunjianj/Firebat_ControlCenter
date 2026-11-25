@@ -17,8 +17,8 @@ import time
 
 MODE_BITS = {1: 0xA0, 2: 0x20, 3: 0x30, 4: 0xA0}
 MODE_NAMES = {1: "办公", 2: "游戏(均衡)", 3: "狂暴", 4: "自定义"}
-# 工具定义的循环顺序（与 EC 固件自身的 1→3→2 不同）
-MODE_CYCLE = {1: 2, 2: 3, 3: 1, 4: 1}
+# 模拟 EC 固件自身的切换顺序：办公→狂暴→游戏→办公
+MODE_CYCLE = {1: 3, 3: 2, 2: 1, 4: 3}
 
 STATE = {
     "mode": 3,
@@ -53,7 +53,7 @@ def broadcast(ev: dict) -> None:
 
 
 def simulate_key_press(delay: float = 1.2) -> None:
-    """模拟按下性能模式键：EC 自行改档，守护进程按 1→2→3 循环推进并广播事件。"""
+    """模拟按下性能模式键：EC 自行改档，守护进程只汇报实际模式。"""
     def run():
         time.sleep(delay)
         if not STATE["listen"]:
@@ -214,10 +214,10 @@ def handle(req: dict) -> tuple[bool, dict]:
         enable = bool(req.get("enable"))
         STATE["listen"] = enable
         if enable:
-            # 真实守护进程会轮询 EC 并在按键后推进档位；这里用一次性延时事件代替，
+            # 真实守护进程会轮询 EC 并汇报实际模式；这里用一次性延时事件代替，
             # 便于在没有硬件时验证「事件 → 界面」链路。
             simulate_key_press()
-        return True, {"listening": enable, "owners": 1 if enable else 0}
+        return True, {"listening": enable, "owners": 1 if enable else 0, "behavior": "observe"}
 
     return False, {"error": f"未知命令: {cmd}"}
 

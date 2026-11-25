@@ -1,6 +1,6 @@
 [package]
 name = "firebat-cc-gui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Firebat GX 控制中心图形前端（Slint）"
 license = "GPL-2.0+"

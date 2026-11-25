@@ -25,7 +25,7 @@ use smithay_client_toolkit::{
 use std::os::fd::{AsFd, AsRawFd};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_output, wl_shm, wl_surface},
@@ -54,6 +54,7 @@ struct Osd {
     layer: Option<LayerSurface>,
     configured: bool,
     deadline: Option<Instant>,
+    retry_at: Option<Instant>,
     window: Rc<MinimalSoftwareWindow>,
     ui: ModeOsd,
     error: Option<String>,
@@ -67,6 +68,7 @@ impl Osd {
         }
         self.configured = false;
         self.deadline = None;
+        self.retry_at = None;
     }
     fn draw(&mut self) -> Result<(), String> {
         if !self.configured {
@@ -109,6 +111,18 @@ impl Osd {
     }
 }
 
+// 显示器暂时消失时，合成器可能反复关闭 layer；限制重建频率，且不延长提示时限。
+fn should_create_layer(
+    has_layer: bool,
+    deadline: Option<Instant>,
+    retry_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    !has_layer
+        && deadline.is_some_and(|end| now < end)
+        && retry_at.is_none_or(|retry| now >= retry)
+}
+
 pub fn run(commands: Receiver<Command>) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) = registry_queue_init::<Osd>(&conn).map_err(|e| e.to_string())?;
@@ -135,6 +149,7 @@ pub fn run(commands: Receiver<Command>) -> Result<(), String> {
         layer: None,
         configured: false,
         deadline: None,
+        retry_at: None,
         window,
         ui,
         error: None,
@@ -161,34 +176,32 @@ pub fn run(commands: Receiver<Command>) -> Result<(), String> {
         if let Some(text) = latest {
             osd.ui.set_mode_label(text.into());
             osd.deadline = Some(Instant::now() + DURATION);
-            if osd.layer.is_none() {
-                let surface = compositor.create_surface(&qh);
-                let region = Region::new(&compositor).map_err(|e| e.to_string())?;
-                surface.set_input_region(Some(region.wl_region()));
-                surface.set_buffer_scale(2);
-                let layer = shell.create_layer_surface(
-                    &qh,
-                    surface,
-                    Layer::Overlay,
-                    Some("firebat-mode-osd"),
-                    None,
-                );
-                layer.set_anchor(Anchor::TOP | Anchor::LEFT);
-                layer.set_margin(MARGIN, 0, 0, MARGIN);
-                layer.set_size(WIDTH, HEIGHT);
-                layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-                layer.set_exclusive_zone(-1);
-                layer.commit();
-                osd.layer = Some(layer);
-            } else {
+            if osd.layer.is_some() {
                 osd.draw()?;
             }
         }
-        if osd
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if osd.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             osd.hide();
+        } else if should_create_layer(osd.layer.is_some(), osd.deadline, osd.retry_at, Instant::now()) {
+            osd.retry_at = None;
+            let surface = compositor.create_surface(&qh);
+            let region = Region::new(&compositor).map_err(|e| e.to_string())?;
+            surface.set_input_region(Some(region.wl_region()));
+            surface.set_buffer_scale(2);
+            let layer = shell.create_layer_surface(
+                &qh,
+                surface,
+                Layer::Overlay,
+                Some("firebat-mode-osd"),
+                None,
+            );
+            layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+            layer.set_margin(MARGIN, 0, 0, MARGIN);
+            layer.set_size(WIDTH, HEIGHT);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.set_exclusive_zone(-1);
+            layer.commit();
+            osd.layer = Some(layer);
         }
         conn.flush().map_err(|e| e.to_string())?;
         // prepare_read + poll 防止阻塞，使显示/隐藏命令在 20ms 内处理。
@@ -248,7 +261,10 @@ impl CompositorHandler for Osd {
 impl LayerShellHandler for Osd {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if self.layer.as_ref().is_some_and(|current| current == layer) {
-            self.error = Some("合成器关闭了挡位覆盖层".into());
+            // 输出被禁用或移除时，layer 可能被关闭；保留提示截止时间，稍后重建。
+            self.layer = None;
+            self.configured = false;
+            self.retry_at = Some(Instant::now() + Duration::from_millis(500));
         }
     }
     fn configure(
@@ -291,3 +307,21 @@ delegate_output!(Osd);
 delegate_shm!(Osd);
 delegate_layer!(Osd);
 delegate_registry!(Osd);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_layer_retries_without_extending_deadline() {
+        let now = Instant::now();
+        let deadline = Some(now + DURATION);
+        let retry = Some(now + Duration::from_millis(500));
+        assert!(should_create_layer(false, deadline, None, now));
+        assert!(!should_create_layer(true, deadline, None, now));
+        assert!(!should_create_layer(false, deadline, retry, now));
+        assert!(should_create_layer(false, deadline, retry, now + Duration::from_millis(500)));
+        assert!(!should_create_layer(false, deadline, retry, now + DURATION));
+        assert!(!should_create_layer(false, None, None, now));
+    }
+}

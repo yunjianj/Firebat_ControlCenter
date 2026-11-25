@@ -1,6 +1,6 @@
 # 从当前工作区构建本地包；请在仓库根目录运行 makepkg。
 pkgname=firebat-control-center
-pkgver=0.6.2
+pkgver=0.6.3
 pkgrel=1
 pkgdesc='Firebat GX Linux 控制中心（CLI 和 GUI）'
 arch=('x86_64')

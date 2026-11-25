@@ -253,7 +253,7 @@ export component OverviewPage inherits Rectangle {
                         spacing: 6px;
                         Text { text: "模式键"; color: Theme.text-mute; font-size: 10.5px; vertical-alignment: center; }
                         Text {
-                            text: Backend.listening ? "监听中" : (Backend.connected ? "未接管" : "未连接");
+                            text: Backend.listening ? "监听中" : (Backend.connected ? "未监听" : "未连接");
                             color: Backend.listening ? Theme.ok : Theme.text-mute;
                             font-size: 10.5px;
                             font-weight: 600;
